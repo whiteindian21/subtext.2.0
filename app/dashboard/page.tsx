@@ -63,6 +63,9 @@ export default function Dashboard() {
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [ocrLoading, setOcrLoading] = useState<boolean>(false);
 
+  // Store last decode result to provide context-aware replies
+  const [lastDecodeResult, setLastDecodeResult] = useState<DecodeResult | null>(null);
+
   // Authentication & Credits
   useEffect(() => {
     const checkUser = async () => {
@@ -102,7 +105,6 @@ export default function Dashboard() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Check file size (max 5MB)
     if (file.size > 5 * 1024 * 1024) {
       showToast('Image too large (max 5MB)', 'error');
       return;
@@ -118,7 +120,7 @@ export default function Dashboard() {
     setOcrLoading(true);
     try {
       const { data: { text } } = await Tesseract.recognize(file, 'eng', {
-        logger: (m) => console.log(m), // optional: show progress
+        logger: (m) => console.log(m),
       });
       if (text.trim()) {
         setInput(text);
@@ -174,6 +176,69 @@ export default function Dashboard() {
         setOutput({ data: data.result, type });
         setCredits(prev => prev - 1);
         setActiveTab(type);
+        
+        // If it's a decode, store the result for future reply generation
+        if (type === 'decode') {
+          setLastDecodeResult(data.result as DecodeResult);
+        }
+        
+        setTimeout(() => {
+          document.getElementById('results')?.scrollIntoView({ behavior: 'smooth' });
+        }, 100);
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Something went wrong. Try again.', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // New function: Generate reply using the last decode result for context
+  const handleReplyWithDecodeContext = async (tone: string) => {
+    if (!input.trim()) {
+      showToast('No message to reply to', 'error');
+      return;
+    }
+    if (credits <= 0) {
+      showToast('Out of credits! Please upgrade.', 'error');
+      return;
+    }
+    if (!lastDecodeResult) {
+      showToast('Please decode the message first', 'error');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      // Build an enhanced context that includes the decoded insights
+      const enhancedContext = [
+        context,
+        `[Decoded Analysis] ${lastDecodeResult.analysis}`,
+        `[Hidden Meaning] ${lastDecodeResult.hiddenMeaning}`,
+        `[Suggested Vibe] ${lastDecodeResult.suggestedVibe}`
+      ].filter(Boolean).join('\n');
+
+      const requestBody = {
+        userId: user?.id,
+        text: input,
+        context: enhancedContext,
+        tone: tone
+      };
+
+      const res = await fetch('/api/generate-reply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      });
+      
+      const data = await res.json();
+      if (data.error) {
+        showToast(data.error, 'error');
+      } else {
+        setOutput({ data: data.result, type: 'reply' });
+        setCredits(prev => prev - 1);
+        setActiveTab('reply');
         setTimeout(() => {
           document.getElementById('results')?.scrollIntoView({ behavior: 'smooth' });
         }, 100);
@@ -205,7 +270,6 @@ export default function Dashboard() {
 
   if (!user) return null;
 
-  // Tone options – refined styling
   const toneOptions = [
     { label: 'Confident', emoji: '😎', color: 'group-hover:border-blue-500/50 group-hover:bg-blue-500/10' },
     { label: 'Funny', emoji: '😂', color: 'group-hover:border-yellow-500/50 group-hover:bg-yellow-500/10' },
@@ -317,7 +381,7 @@ export default function Dashboard() {
             />
           </div>
 
-          {/* Action Buttons: Decode + Quick Reply Tones (inline for faster access) */}
+          {/* Action Buttons: Decode + Quick Reply Tones */}
           <div className="mt-8 space-y-4">
             <button
               onClick={() => handleAction('decode')}
@@ -328,7 +392,7 @@ export default function Dashboard() {
               {loading && activeTab === 'decode' ? 'Decoding...' : 'Decode Message'}
             </button>
 
-            {/* Quick Reply Tone Row - shown even before decode, makes it easier */}
+            {/* Quick Reply Tone Row */}
             <div>
               <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 text-center">✨ Or generate a reply directly with a tone</p>
               <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
@@ -390,12 +454,12 @@ export default function Dashboard() {
                   </div>
                   <div className="h-px w-full bg-gradient-to-r from-transparent via-white/10 to-transparent my-10"></div>
                   <div>
-                    <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-6 text-center">⚡ Generate a reply based on this</p>
+                    <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-6 text-center">⚡ Generate a reply based on this situation</p>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                       {toneOptions.map((tone) => (
                         <button
                           key={tone.label}
-                          onClick={() => handleAction('reply', tone.label)}
+                          onClick={() => handleReplyWithDecodeContext(tone.label)}
                           disabled={loading}
                           className={`group/tone relative py-4 px-2 rounded-xl border border-white/5 bg-white/5 flex flex-col items-center justify-center gap-2 transition-all hover:-translate-y-1 active:scale-95 ${tone.color} disabled:opacity-50 disabled:translate-y-0`}
                         >
