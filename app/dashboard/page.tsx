@@ -1,27 +1,14 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabaseClient';
 import { User } from '@supabase/supabase-js';
 import Tesseract from 'tesseract.js';
 import { 
-  Sparkles, 
-  LogOut, 
-  Copy, 
-  Loader2, 
-  Zap, 
-  MessageSquare, 
-  Brain,
-  X,
-  Settings,
-  CheckCircle,
-  Info,
-  ChevronRight,
-  Image as ImageIcon,
-  Upload,
-  Trash2
+  Sparkles, LogOut, Copy, Loader2, Zap, MessageSquare, Brain,
+  X, Settings, CheckCircle, Info, ChevronRight, Upload, Trash2
 } from 'lucide-react';
 
 // Types
@@ -45,6 +32,23 @@ interface ReplyResult {
   replies: ReplyItem[];
 }
 
+// Expanded tone options with emoji and category
+const TONE_OPTIONS = [
+  { label: 'Confident', emoji: '😎', category: 'confident', vibeMatch: ['serious', 'confident', 'aggressive'] },
+  { label: 'Funny', emoji: '😂', category: 'funny', vibeMatch: ['playful', 'sarcastic'] },
+  { label: 'Savage', emoji: '🔥', category: 'savage', vibeMatch: ['aggressive', 'sarcastic'] },
+  { label: 'Chill', emoji: '❤️', category: 'chill', vibeMatch: ['casual', 'playful', 'serious'] },
+  { label: 'Sarcastic', emoji: '🙄', category: 'sarcastic', vibeMatch: ['sarcastic', 'playful'] },
+  { label: 'Romantic', emoji: '😘', category: 'romantic', vibeMatch: ['romantic'] },
+  // New tones
+  { label: 'Supportive', emoji: '🤗', category: 'supportive', vibeMatch: ['serious', 'romantic', 'caring'] },
+  { label: 'Short & Dry', emoji: '🗿', category: 'dry', vibeMatch: ['serious', 'sarcastic', 'casual'] },
+  { label: 'Energetic', emoji: '⚡', category: 'energetic', vibeMatch: ['playful', 'confident'] },
+  { label: 'Mysterious', emoji: '🕵️', category: 'mysterious', vibeMatch: ['serious', 'sarcastic', 'playful'] },
+  { label: 'Apologetic', emoji: '🙏', category: 'apologetic', vibeMatch: ['serious'] },
+  { label: 'Flirty', emoji: '😉', category: 'flirty', vibeMatch: ['romantic', 'playful'] },
+];
+
 export default function Dashboard() {
   const router = useRouter();
   
@@ -58,15 +62,15 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<'decode' | 'reply'>('decode');
   const [toast, setToast] = useState<{ message: string; type: ToastType } | null>(null);
   
-  // Screenshot analyzer states
+  // Screenshot
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [ocrLoading, setOcrLoading] = useState<boolean>(false);
 
-  // Store last decode result to provide context-aware replies
+  // Store last decode result for context-aware replies
   const [lastDecodeResult, setLastDecodeResult] = useState<DecodeResult | null>(null);
 
-  // Authentication & Credits
+  // Auth & Credits
   useEffect(() => {
     const checkUser = async () => {
       const { data: { session } } = await supabase.auth.getSession();
@@ -100,16 +104,14 @@ export default function Dashboard() {
     if (data) setCredits(data.credits);
   };
 
-  // OCR: extract text from screenshot
+  // OCR
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     if (file.size > 5 * 1024 * 1024) {
       showToast('Image too large (max 5MB)', 'error');
       return;
     }
-
     setSelectedImage(file);
     const previewUrl = URL.createObjectURL(file);
     setImagePreview(previewUrl);
@@ -126,11 +128,11 @@ export default function Dashboard() {
         setInput(text);
         showToast('Text extracted from screenshot!', 'success');
       } else {
-        showToast('No text found in image. Try a clearer screenshot.', 'error');
+        showToast('No text found. Try a clearer screenshot.', 'error');
       }
     } catch (err) {
       console.error('OCR error:', err);
-      showToast('Failed to extract text. Please try again.', 'error');
+      showToast('Failed to extract text.', 'error');
     } finally {
       setOcrLoading(false);
     }
@@ -177,7 +179,6 @@ export default function Dashboard() {
         setCredits(prev => prev - 1);
         setActiveTab(type);
         
-        // If it's a decode, store the result for future reply generation
         if (type === 'decode') {
           setLastDecodeResult(data.result as DecodeResult);
         }
@@ -194,7 +195,7 @@ export default function Dashboard() {
     }
   };
 
-  // New function: Generate reply using the last decode result for context
+  // Generate reply using decoded insights
   const handleReplyWithDecodeContext = async (tone: string) => {
     if (!input.trim()) {
       showToast('No message to reply to', 'error');
@@ -211,7 +212,7 @@ export default function Dashboard() {
 
     setLoading(true);
     try {
-      // Build an enhanced context that includes the decoded insights
+      // Build enhanced context exactly as the backend expects
       const enhancedContext = [
         context,
         `[Decoded Analysis] ${lastDecodeResult.analysis}`,
@@ -251,6 +252,19 @@ export default function Dashboard() {
     }
   };
 
+  // Determine which tones are allowed based on suggestedVibe
+  const getAllowedTones = () => {
+    if (!lastDecodeResult || !lastDecodeResult.suggestedVibe) {
+      return TONE_OPTIONS; // all tones allowed if no decode result
+    }
+    const vibe = lastDecodeResult.suggestedVibe.toLowerCase();
+    // If vibe is "serious", only tones that match 'serious' category
+    // You can customize this mapping further
+    return TONE_OPTIONS.filter(tone => 
+      tone.vibeMatch.some(match => vibe.includes(match) || match === vibe)
+    );
+  };
+
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.push('/');
@@ -270,18 +284,13 @@ export default function Dashboard() {
 
   if (!user) return null;
 
-  const toneOptions = [
-    { label: 'Confident', emoji: '😎', color: 'group-hover:border-blue-500/50 group-hover:bg-blue-500/10' },
-    { label: 'Funny', emoji: '😂', color: 'group-hover:border-yellow-500/50 group-hover:bg-yellow-500/10' },
-    { label: 'Savage', emoji: '🔥', color: 'group-hover:border-red-500/50 group-hover:bg-red-500/10' },
-    { label: 'Chill', emoji: '❤️', color: 'group-hover:border-pink-500/50 group-hover:bg-pink-500/10' },
-    { label: 'Sarcastic', emoji: '🙄', color: 'group-hover:border-purple-500/50 group-hover:bg-purple-500/10' },
-    { label: 'Romantic', emoji: '😘', color: 'group-hover:border-green-500/50 group-hover:bg-green-500/10' }
-  ];
+  // Allowed tones for decode result area (filtered)
+  const allowedTones = getAllowedTones();
+  const hasFilteredTones = allowedTones.length < TONE_OPTIONS.length;
 
   return (
     <div className="min-h-screen bg-zinc-950 text-white font-sans selection:bg-purple-500/30 relative">
-      {/* Ambient Background Elements */}
+      {/* Ambient background (same as before) */}
       <div className="fixed inset-0 pointer-events-none">
         <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-purple-900/20 via-zinc-950 to-zinc-950 opacity-50" />
         <div className="absolute inset-0 opacity-20" style={{ backgroundImage: `radial-gradient(circle at 1px 1px, rgba(255,255,255,0.05) 1px, transparent 0)`, backgroundSize: `40px 40px` }} />
@@ -331,17 +340,14 @@ export default function Dashboard() {
 
         {/* Input Card */}
         <div className="bg-zinc-900/40 border border-white/10 rounded-3xl p-6 md:p-8 mb-12 backdrop-blur-xl shadow-2xl shadow-black/20 transition-all hover:border-white/20 animate-slide-in-up">
-          {/* Text Input Area */}
-          <div className="relative">
-            <textarea
-              className="w-full bg-transparent text-xl md:text-2xl placeholder-zinc-600 focus:outline-none resize-none min-h-[120px] leading-relaxed font-medium"
-              placeholder='Paste their message here... e.g. "Im busy rn, talk later" or upload a screenshot'
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-            />
-          </div>
+          <textarea
+            className="w-full bg-transparent text-xl md:text-2xl placeholder-zinc-600 focus:outline-none resize-none min-h-[120px] leading-relaxed font-medium"
+            placeholder='Paste their message here... e.g. "Im busy rn, talk later" or upload a screenshot'
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+          />
 
-          {/* Screenshot Upload & Preview */}
+          {/* Screenshot Upload */}
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 rounded-full bg-purple-500/10 border border-purple-500/30 text-purple-300 text-sm font-medium hover:bg-purple-500/20 transition-colors">
               <Upload size={16} />
@@ -357,10 +363,7 @@ export default function Dashboard() {
             {imagePreview && !ocrLoading && (
               <div className="relative inline-block">
                 <img src={imagePreview} alt="Preview" className="h-12 w-auto rounded-md border border-white/10 object-cover" />
-                <button
-                  onClick={clearImage}
-                  className="absolute -top-2 -right-2 bg-red-500 rounded-full p-0.5 text-white hover:bg-red-600 transition"
-                >
+                <button onClick={clearImage} className="absolute -top-2 -right-2 bg-red-500 rounded-full p-0.5 text-white hover:bg-red-600 transition">
                   <Trash2 size={12} />
                 </button>
               </div>
@@ -381,7 +384,7 @@ export default function Dashboard() {
             />
           </div>
 
-          {/* Action Buttons: Decode + Quick Reply Tones */}
+          {/* Action Buttons */}
           <div className="mt-8 space-y-4">
             <button
               onClick={() => handleAction('decode')}
@@ -392,16 +395,16 @@ export default function Dashboard() {
               {loading && activeTab === 'decode' ? 'Decoding...' : 'Decode Message'}
             </button>
 
-            {/* Quick Reply Tone Row */}
+            {/* Quick Reply Tones (always visible, all tones) */}
             <div>
               <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 text-center">✨ Or generate a reply directly with a tone</p>
               <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-                {toneOptions.map((tone) => (
+                {TONE_OPTIONS.map((tone) => (
                   <button
                     key={tone.label}
                     onClick={() => handleAction('reply', tone.label)}
                     disabled={loading || (!input.trim() && !ocrLoading)}
-                    className={`group/tone py-2 px-1 rounded-xl border border-white/5 bg-white/5 flex flex-col items-center justify-center gap-1 transition-all hover:-translate-y-1 active:scale-95 ${tone.color} disabled:opacity-50 disabled:translate-y-0`}
+                    className="group/tone py-2 px-1 rounded-xl border border-white/5 bg-white/5 flex flex-col items-center justify-center gap-1 transition-all hover:-translate-y-1 active:scale-95 disabled:opacity-50 disabled:translate-y-0"
                   >
                     <span className="text-xl filter drop-shadow-sm group-hover/tone:scale-110 transition-transform">{tone.emoji}</span>
                     <span className="text-[10px] font-bold uppercase tracking-wide text-zinc-300 group-hover/tone:text-white">{tone.label}</span>
@@ -454,19 +457,35 @@ export default function Dashboard() {
                   </div>
                   <div className="h-px w-full bg-gradient-to-r from-transparent via-white/10 to-transparent my-10"></div>
                   <div>
-                    <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-6 text-center">⚡ Generate a reply based on this situation</p>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                      {toneOptions.map((tone) => (
-                        <button
-                          key={tone.label}
-                          onClick={() => handleReplyWithDecodeContext(tone.label)}
-                          disabled={loading}
-                          className={`group/tone relative py-4 px-2 rounded-xl border border-white/5 bg-white/5 flex flex-col items-center justify-center gap-2 transition-all hover:-translate-y-1 active:scale-95 ${tone.color} disabled:opacity-50 disabled:translate-y-0`}
-                        >
-                          <span className="text-2xl filter drop-shadow-sm group-hover/tone:scale-110 transition-transform">{tone.emoji}</span>
-                          <span className="text-xs font-bold uppercase tracking-wide text-zinc-300 group-hover/tone:text-white">{tone.label}</span>
-                        </button>
-                      ))}
+                    <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-6 text-center">
+                      ⚡ Generate a reply based on this situation
+                      {hasFilteredTones && (
+                        <span className="ml-2 text-purple-400 text-[10px]">(Only tones matching "{lastDecodeResult?.suggestedVibe}" vibe are enabled)</span>
+                      )}
+                    </p>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                      {TONE_OPTIONS.map((tone) => {
+                        const isAllowed = allowedTones.includes(tone);
+                        return (
+                          <button
+                            key={tone.label}
+                            onClick={() => isAllowed && handleReplyWithDecodeContext(tone.label)}
+                            disabled={loading || !isAllowed}
+                            className={`relative py-4 px-2 rounded-xl border flex flex-col items-center justify-center gap-2 transition-all
+                              ${isAllowed 
+                                ? 'border-white/5 bg-white/5 hover:-translate-y-1 active:scale-95 hover:border-white/20' 
+                                : 'border-white/5 bg-white/5 opacity-40 cursor-not-allowed grayscale'
+                              }
+                            `}
+                          >
+                            <span className="text-2xl filter drop-shadow-sm transition-transform">{tone.emoji}</span>
+                            <span className="text-xs font-bold uppercase tracking-wide text-zinc-300">{tone.label}</span>
+                            {!isAllowed && (
+                              <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-[8px] flex items-center justify-center">✕</span>
+                            )}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 </div>
