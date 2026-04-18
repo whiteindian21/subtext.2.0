@@ -13,7 +13,7 @@ interface RawAIResponse {
   replies: Array<{ text?: unknown; tone?: unknown; explanation?: unknown }>;
 }
 
-// Helper to parse the enhanced context
+// Helper to parse enhanced context
 function parseContext(context: string): {
   suggestedVibe?: string;
   hiddenMeaning?: string;
@@ -45,7 +45,11 @@ export async function POST(req: Request) {
     }
 
     tone = tone.toLowerCase();
-    const validTones = ['confident', 'funny', 'savage', 'chill', 'sarcastic', 'romantic'];
+    // Expanded valid tones list (12 tones)
+    const validTones = [
+      'confident', 'funny', 'savage', 'chill', 'sarcastic', 'romantic',
+      'supportive', 'dry', 'energetic', 'mysterious', 'apologetic', 'flirty'
+    ];
     if (!validTones.includes(tone)) {
       return NextResponse.json({ error: 'Invalid tone' }, { status: 400 });
     }
@@ -56,22 +60,25 @@ export async function POST(req: Request) {
     let overrideInstruction = '';
 
     if (decoded.suggestedVibe) {
-      // Map suggested vibe to allowed tones (or use it as the primary directive)
+      // Map suggested vibe to the most appropriate tone (fallback)
       const vibeToToneMap: Record<string, string> = {
-        serious: 'confident',   // or 'chill' – map as you like
+        serious: 'confident',      // or 'dry' – you decide
         playful: 'funny',
         romantic: 'romantic',
         sarcastic: 'sarcastic',
         aggressive: 'savage',
         casual: 'chill',
+        caring: 'supportive',
+        energetic: 'energetic',
+        mysterious: 'mysterious',
+        apologetic: 'apologetic',
+        flirty: 'flirty',
       };
-      // If the suggested vibe maps to a tone, optionally override the user's choice
       const mappedTone = vibeToToneMap[decoded.suggestedVibe];
       if (mappedTone && mappedTone !== tone) {
         effectiveTone = mappedTone;
         overrideInstruction = `NOTE: The context strongly suggests a "${decoded.suggestedVibe}" vibe. Even though the user requested a "${tone}" tone, you MUST prioritize the "${decoded.suggestedVibe}" vibe. Adjust your reply accordingly.`;
       } else if (!mappedTone) {
-        // No direct mapping, but still instruct to follow the vibe
         overrideInstruction = `The context indicates the suggested vibe is "${decoded.suggestedVibe}". Follow that vibe over the requested tone "${tone}" if they conflict.`;
       }
     }
@@ -113,13 +120,20 @@ export async function POST(req: Request) {
       lengthInstruction = "Generate standard text message replies (1-2 sentences, under 30 words).";
     }
 
+    // Expanded tone map for all 12 tones
     const toneMap: Record<string, string> = {
       confident: "confident, self-assured, and high-value",
       funny: "humorous, witty, and playful",
       savage: "slightly aggressive, roasting, and unbothered",
       chill: "casual, low-effort, and relaxed",
       sarcastic: "sarcastic, witty, and deadpan",
-      romantic: "romantic, affectionate, and flirtatious"
+      romantic: "romantic, affectionate, and flirtatious",
+      supportive: "supportive, empathetic, and encouraging",
+      dry: "short, blunt, and to the point (minimal words, no emotion)",
+      energetic: "enthusiastic, excited, and high-energy (use exclamation points, emojis)",
+      mysterious: "vague, intriguing, and cryptic (leave them guessing)",
+      apologetic: "humble, remorseful, and sincere (acknowledge mistake or misunderstanding)",
+      flirty: "playful, teasing, and charming (lighthearted romantic interest)",
     };
 
     const systemMessage = `You are SubText AI, a master of text message psychology.
