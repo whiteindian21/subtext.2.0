@@ -32,7 +32,7 @@ interface ReplyResult {
   replies: ReplyItem[];
 }
 
-// Expanded tone options with emoji and category
+// Tone mapping for internal use (no longer shown to user)
 const TONE_OPTIONS = [
   { label: 'Confident', emoji: '😎', category: 'confident', vibeMatch: ['serious', 'confident', 'aggressive'] },
   { label: 'Funny', emoji: '😂', category: 'funny', vibeMatch: ['playful', 'sarcastic'] },
@@ -40,7 +40,6 @@ const TONE_OPTIONS = [
   { label: 'Chill', emoji: '❤️', category: 'chill', vibeMatch: ['casual', 'playful', 'serious'] },
   { label: 'Sarcastic', emoji: '🙄', category: 'sarcastic', vibeMatch: ['sarcastic', 'playful'] },
   { label: 'Romantic', emoji: '😘', category: 'romantic', vibeMatch: ['romantic'] },
-  // New tones
   { label: 'Supportive', emoji: '🤗', category: 'supportive', vibeMatch: ['serious', 'romantic', 'caring'] },
   { label: 'Short & Dry', emoji: '🗿', category: 'dry', vibeMatch: ['serious', 'sarcastic', 'casual'] },
   { label: 'Energetic', emoji: '⚡', category: 'energetic', vibeMatch: ['playful', 'confident'] },
@@ -48,6 +47,15 @@ const TONE_OPTIONS = [
   { label: 'Apologetic', emoji: '🙏', category: 'apologetic', vibeMatch: ['serious'] },
   { label: 'Flirty', emoji: '😉', category: 'flirty', vibeMatch: ['romantic', 'playful'] },
 ];
+
+// Helper to pick the best tone based on suggestedVibe from decode result
+const getBestToneForVibe = (suggestedVibe: string): string => {
+  const vibeLower = suggestedVibe.toLowerCase();
+  const match = TONE_OPTIONS.find(tone => 
+    tone.vibeMatch.some(match => vibeLower.includes(match) || match === vibeLower)
+  );
+  return match?.label || 'Chill'; // fallback tone
+};
 
 export default function Dashboard() {
   const router = useRouter();
@@ -144,8 +152,8 @@ export default function Dashboard() {
     setImagePreview(null);
   };
 
-  // Main actions
-  const handleAction = async (type: OutputType, tone?: string) => {
+  // Main decode action
+  const handleDecode = async () => {
     if (!input.trim()) {
       showToast('Please paste a message or upload a screenshot', 'error');
       return;
@@ -156,32 +164,25 @@ export default function Dashboard() {
     }
 
     setLoading(true);
+    setActiveTab('decode');
     try {
-      const requestBody: any = {
-        userId: user?.id,
-        text: input,
-        context: context.trim() || undefined
-      };
-      if (type === 'reply' && tone) requestBody.tone = tone;
-
-      const endpoint = type === 'reply' ? '/api/generate-reply' : '/api/generate';
-      const res = await fetch(endpoint, {
+      const res = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody)
+        body: JSON.stringify({
+          userId: user?.id,
+          text: input,
+          context: context.trim() || undefined
+        })
       });
       
       const data = await res.json();
       if (data.error) {
         showToast(data.error, 'error');
       } else {
-        setOutput({ data: data.result, type });
+        setOutput({ data: data.result, type: 'decode' });
         setCredits(prev => prev - 1);
-        setActiveTab(type);
-        
-        if (type === 'decode') {
-          setLastDecodeResult(data.result as DecodeResult);
-        }
+        setLastDecodeResult(data.result as DecodeResult);
         
         setTimeout(() => {
           document.getElementById('results')?.scrollIntoView({ behavior: 'smooth' });
@@ -195,24 +196,22 @@ export default function Dashboard() {
     }
   };
 
-  // Generate reply using decoded insights
-  const handleReplyWithDecodeContext = async (tone: string) => {
-    if (!input.trim()) {
-      showToast('No message to reply to', 'error');
+  // Generate replies using the decode context (no tone selection)
+  const generateRepliesFromDecode = async () => {
+    if (!lastDecodeResult) {
+      showToast('Please decode the message first', 'error');
       return;
     }
     if (credits <= 0) {
       showToast('Out of credits! Please upgrade.', 'error');
       return;
     }
-    if (!lastDecodeResult) {
-      showToast('Please decode the message first', 'error');
-      return;
-    }
 
     setLoading(true);
+    setActiveTab('reply');
     try {
-      // Build enhanced context exactly as the backend expects
+      const bestTone = getBestToneForVibe(lastDecodeResult.suggestedVibe);
+      
       const enhancedContext = [
         context,
         `[Decoded Analysis] ${lastDecodeResult.analysis}`,
@@ -220,17 +219,15 @@ export default function Dashboard() {
         `[Suggested Vibe] ${lastDecodeResult.suggestedVibe}`
       ].filter(Boolean).join('\n');
 
-      const requestBody = {
-        userId: user?.id,
-        text: input,
-        context: enhancedContext,
-        tone: tone
-      };
-
       const res = await fetch('/api/generate-reply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody)
+        body: JSON.stringify({
+          userId: user?.id,
+          text: input,
+          context: enhancedContext,
+          tone: bestTone
+        })
       });
       
       const data = await res.json();
@@ -239,7 +236,6 @@ export default function Dashboard() {
       } else {
         setOutput({ data: data.result, type: 'reply' });
         setCredits(prev => prev - 1);
-        setActiveTab('reply');
         setTimeout(() => {
           document.getElementById('results')?.scrollIntoView({ behavior: 'smooth' });
         }, 100);
@@ -250,19 +246,6 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  };
-
-  // Determine which tones are allowed based on suggestedVibe
-  const getAllowedTones = () => {
-    if (!lastDecodeResult || !lastDecodeResult.suggestedVibe) {
-      return TONE_OPTIONS; // all tones allowed if no decode result
-    }
-    const vibe = lastDecodeResult.suggestedVibe.toLowerCase();
-    // If vibe is "serious", only tones that match 'serious' category
-    // You can customize this mapping further
-    return TONE_OPTIONS.filter(tone => 
-      tone.vibeMatch.some(match => vibe.includes(match) || match === vibe)
-    );
   };
 
   const handleLogout = async () => {
@@ -284,13 +267,9 @@ export default function Dashboard() {
 
   if (!user) return null;
 
-  // Allowed tones for decode result area (filtered)
-  const allowedTones = getAllowedTones();
-  const hasFilteredTones = allowedTones.length < TONE_OPTIONS.length;
-
   return (
     <div className="min-h-screen bg-zinc-950 text-white font-sans selection:bg-purple-500/30 relative">
-      {/* Ambient background (same as before) */}
+      {/* Ambient background */}
       <div className="fixed inset-0 pointer-events-none">
         <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-purple-900/20 via-zinc-950 to-zinc-950 opacity-50" />
         <div className="absolute inset-0 opacity-20" style={{ backgroundImage: `radial-gradient(circle at 1px 1px, rgba(255,255,255,0.05) 1px, transparent 0)`, backgroundSize: `40px 40px` }} />
@@ -384,34 +363,16 @@ export default function Dashboard() {
             />
           </div>
 
-          {/* Action Buttons */}
-          <div className="mt-8 space-y-4">
+          {/* Single Action Button: Decode */}
+          <div className="mt-8">
             <button
-              onClick={() => handleAction('decode')}
+              onClick={handleDecode}
               disabled={loading || (!input.trim() && !ocrLoading)}
               className="w-full bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white font-bold py-4 rounded-xl hover:opacity-90 hover:shadow-lg hover:shadow-purple-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 text-lg group"
             >
               {loading && activeTab === 'decode' ? <Loader2 className="animate-spin" size={22} /> : <Brain size={22} className="group-hover:scale-110 transition-transform" />}
               {loading && activeTab === 'decode' ? 'Decoding...' : 'Decode Message'}
             </button>
-
-            {/* Quick Reply Tones (always visible, all tones) */}
-            <div>
-              <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 text-center">✨ Or generate a reply directly with a tone</p>
-              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-                {TONE_OPTIONS.map((tone) => (
-                  <button
-                    key={tone.label}
-                    onClick={() => handleAction('reply', tone.label)}
-                    disabled={loading || (!input.trim() && !ocrLoading)}
-                    className="group/tone py-2 px-1 rounded-xl border border-white/5 bg-white/5 flex flex-col items-center justify-center gap-1 transition-all hover:-translate-y-1 active:scale-95 disabled:opacity-50 disabled:translate-y-0"
-                  >
-                    <span className="text-xl filter drop-shadow-sm group-hover/tone:scale-110 transition-transform">{tone.emoji}</span>
-                    <span className="text-[10px] font-bold uppercase tracking-wide text-zinc-300 group-hover/tone:text-white">{tone.label}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
           </div>
         </div>
 
@@ -455,39 +416,24 @@ export default function Dashboard() {
                       <p className="text-zinc-300 text-lg">{(output.data as DecodeResult).suggestedVibe}</p>
                     </div>
                   </div>
+                  
                   <div className="h-px w-full bg-gradient-to-r from-transparent via-white/10 to-transparent my-10"></div>
-                  <div>
-                    <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-6 text-center">
-                      ⚡ Generate a reply based on this situation
-                      {hasFilteredTones && (
-                        <span className="ml-2 text-purple-400 text-[10px]">(Only tones matching "{lastDecodeResult?.suggestedVibe}" vibe are enabled)</span>
-                      )}
-                    </p>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                      {TONE_OPTIONS.map((tone) => {
-                        const isAllowed = allowedTones.includes(tone);
-                        return (
-                          <button
-                            key={tone.label}
-                            onClick={() => isAllowed && handleReplyWithDecodeContext(tone.label)}
-                            disabled={loading || !isAllowed}
-                            className={`relative py-4 px-2 rounded-xl border flex flex-col items-center justify-center gap-2 transition-all
-                              ${isAllowed 
-                                ? 'border-white/5 bg-white/5 hover:-translate-y-1 active:scale-95 hover:border-white/20' 
-                                : 'border-white/5 bg-white/5 opacity-40 cursor-not-allowed grayscale'
-                              }
-                            `}
-                          >
-                            <span className="text-2xl filter drop-shadow-sm transition-transform">{tone.emoji}</span>
-                            <span className="text-xs font-bold uppercase tracking-wide text-zinc-300">{tone.label}</span>
-                            {!isAllowed && (
-                              <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-[8px] flex items-center justify-center">✕</span>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
+                  
+                  {/* Generate Replies Button - uses decode context, no tone selection */}
+                  <button
+                    onClick={generateRepliesFromDecode}
+                    disabled={loading}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl py-4 font-semibold text-white hover:bg-white/10 transition-all flex items-center justify-center gap-2 group"
+                  >
+                    {loading && activeTab === 'reply' ? (
+                      <Loader2 size={20} className="animate-spin" />
+                    ) : (
+                      <>
+                        <MessageSquare size={20} />
+                        Generate Smart Replies
+                      </>
+                    )}
+                  </button>
                 </div>
               </div>
             )}
