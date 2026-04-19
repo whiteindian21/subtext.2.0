@@ -8,15 +8,7 @@ interface ReplyResult {
   replies: Array<{ text: string; tone: string; explanation?: string }>;
 }
 
-interface RawAIResponse {
-  replies: Array<{ text?: unknown; tone?: unknown; explanation?: unknown }>;
-}
-
-function parseContext(context: string): {
-  suggestedVibe?: string;
-  hiddenMeaning?: string;
-  analysis?: string;
-} {
+function parseContext(context: string) {
   const result: any = {};
   if (!context) return result;
 
@@ -34,14 +26,27 @@ function parseContext(context: string): {
 
 export async function POST(req: Request) {
   try {
+    // ✅ ENV SAFETY (fixes GitHub CI failure)
+    if (!DEEPSEEK_API_KEY) {
+      return NextResponse.json(
+        { error: 'Missing DEEPSEEK_API_KEY' },
+        { status: 500 }
+      );
+    }
+
     const body = await req.json();
     let { userId, text, tone, context } = body;
 
+    // ✅ VALIDATION
     if (!userId || !text || !tone) {
-      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'Missing required fields' },
+        { status: 400 }
+      );
     }
 
     tone = tone.toLowerCase();
+
     const validTones = [
       'confident', 'funny', 'savage', 'chill', 'sarcastic', 'romantic',
       'supportive', 'dry', 'energetic', 'mysterious', 'apologetic', 'flirty'
@@ -51,9 +56,9 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Invalid tone' }, { status: 400 });
     }
 
+    // ✅ CONTEXT PARSING
     const decoded = parseContext(context);
     let effectiveTone = tone;
-    let overrideInstruction = '';
 
     if (decoded.suggestedVibe) {
       const vibeToToneMap: Record<string, string> = {
@@ -71,13 +76,10 @@ export async function POST(req: Request) {
       };
 
       const mappedTone = vibeToToneMap[decoded.suggestedVibe];
-
-      if (mappedTone && mappedTone !== tone) {
-        effectiveTone = mappedTone;
-        overrideInstruction = `NOTE: The context strongly suggests a "${decoded.suggestedVibe}" vibe. Even though the user requested a "${tone}" tone, prioritize the "${decoded.suggestedVibe}" vibe.`;
-      }
+      if (mappedTone) effectiveTone = mappedTone;
     }
 
+    // ✅ USER CHECK
     const { data: userExists, error: userError } = await supabase
       .from('profiles')
       .select('id')
@@ -88,97 +90,153 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    const isShortMessage = text.length < 50;
-    const isLongMessage = text.length > 120;
+    // ✅ LENGTH LOGIC
+    const isShort = text.length < 50;
+    const isLong = text.length > 120;
 
-    let lengthInstruction = '';
-    if (isShortMessage) {
-      lengthInstruction = "Short reply under 15 words.";
-    } else if (isLongMessage) {
-      lengthInstruction = "Detailed reply (2-3 sentences).";
-    } else {
-      lengthInstruction = "Normal reply (1-2 sentences).";
-    }
+    const lengthInstruction = isShort
+      ? "Short reply under 15 words."
+      : isLong
+      ? "Detailed reply (2-3 sentences)."
+      : "Normal reply (1-2 sentences).";
 
     const toneMap: Record<string, string> = {
       confident: "confident and high-value",
       funny: "witty and playful",
-      savage: "slightly aggressive and unbothered",
+      savage: "slightly aggressive",
       chill: "casual and relaxed",
       sarcastic: "sarcastic and deadpan",
       romantic: "affectionate and flirty",
-      supportive: "empathetic and encouraging",
+      supportive: "empathetic",
       dry: "short and blunt",
       energetic: "excited and expressive",
       mysterious: "intriguing and vague",
-      apologetic: "remorseful and sincere",
+      apologetic: "remorseful",
       flirty: "playful and teasing",
     };
 
+    // ✅ FIXED REGEX (no 's' flag)
+    const matches = text.match(/Other:\s*([\s\S]*?)(?=\n(?:User:|Other:)|\n*$)/g);
+
     let conversationContext = text;
-    let lastOtherMessage = '';
 
-    // ✅ FIXED REGEX HERE (removed 's' flag)
-    const otherMatches = text.match(/Other:\s*([\s\S]*?)(?=\n(?:User:|Other:)|\n*$)/g);
-
-    if (otherMatches && otherMatches.length > 0) {
-      lastOtherMessage = otherMatches[otherMatches.length - 1]
+    if (matches && matches.length > 0) {
+      const last = matches[matches.length - 1]
         .replace(/^Other:\s*/, '')
         .trim();
 
-      conversationContext = `Full conversation:\n${text}\n\nMost recent message: "${lastOtherMessage}"`;
-    } else {
-      lastOtherMessage = text;
-      conversationContext = `Message: "${text}"`;
+      conversationContext = `Conversation:\n${text}\n\nLast message: "${last}"`;
     }
 
     const systemMessage = `Generate 5 replies in a ${toneMap[effectiveTone]} tone. ${lengthInstruction}`;
-
     const userPrompt = `${conversationContext}\nTone: ${effectiveTone}`;
 
-    const response = await fetch(DEEPSEEK_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        messages: [
-          { role: 'system', content: systemMessage },
-          { role: 'user', content: userPrompt }
-        ],
-        temperature: 0.8,
-        response_format: { type: 'json_object' }
-      })
-    });
+    // ✅ TIMEOUT HANDLING
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
 
-    const data = await response.json();
-    const aiText = data.choices[0]?.message?.content;
+    let aiText = '';
 
+    try {
+      const response = await fetch(DEEPSEEK_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: 'deepseek-chat',
+          messages: [
+            { role: 'system', content: systemMessage },
+            { role: 'user', content: userPrompt },
+          ],
+          temperature: 0.8,
+          response_format: { type: 'json_object' },
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        throw new Error(`AI API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      aiText = data?.choices?.[0]?.message?.content || '';
+
+      if (!aiText) throw new Error('Empty AI response');
+
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        return NextResponse.json(
+          { error: 'AI timeout' },
+          { status: 504 }
+        );
+      }
+
+      console.error('AI ERROR:', err);
+
+      return NextResponse.json(
+        { error: 'AI request failed' },
+        { status: 500 }
+      );
+    }
+
+    // ✅ SAFE PARSING
     let parsed: ReplyResult;
 
     try {
-      const raw = JSON.parse(aiText);
-      parsed = { replies: raw.replies.slice(0, 5) };
+      const raw = JSON.parse(aiText) as any;
+
+      parsed = {
+        replies: Array.isArray(raw.replies)
+          ? raw.replies.slice(0, 5).map((r: any) => ({
+              text: String(r.text || '').trim(),
+              tone: String(r.tone || effectiveTone),
+              explanation: r.explanation
+                ? String(r.explanation)
+                : undefined,
+            }))
+          : [],
+      };
+
+      if (parsed.replies.length === 0) throw new Error();
+
     } catch {
       parsed = {
-        replies: [{
-          text: aiText,
-          tone: effectiveTone
-        }]
+        replies: [
+          {
+            text: aiText.slice(0, 120),
+            tone: effectiveTone,
+          },
+        ],
       };
     }
 
-    await supabase.rpc('deduct_credits', {
-      p_user_id: userId,
-      p_amount: 1,
-      p_type: 'reply'
+    // ✅ CREDIT DEDUCTION (SAFE)
+    try {
+      await supabase.rpc('deduct_credits', {
+        p_user_id: userId,
+        p_amount: 1,
+        p_type: 'reply',
+      });
+    } catch (err) {
+      console.error('Credit deduction failed:', err);
+    }
+
+    return NextResponse.json({
+      success: true,
+      result: parsed,
     });
 
-    return NextResponse.json({ success: true, result: parsed });
-
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    console.error('ROUTE ERROR:', err);
+
+    return NextResponse.json(
+      { error: err.message || 'Server error' },
+      { status: 500 }
+    );
   }
 }
