@@ -6,6 +6,11 @@ export const runtime = 'nodejs'; // needed for Buffer
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
+type ExtractedMessage = {
+  role: string;
+  text: string;
+};
+
 export async function POST(req: NextRequest) {
   try {
     if (!OPENAI_API_KEY) {
@@ -75,7 +80,7 @@ Now process the attached image.`
           }
         ],
         response_format: { type: 'json_object' },
-        max_tokens: 2000, // increased for longer conversations
+        max_tokens: 2000,
       });
 
       aiText = response?.choices?.[0]?.message?.content || '';
@@ -115,7 +120,7 @@ Now process the attached image.`
     }
 
     // ---------- Normalize messages ----------
-    let messages: { role: string; text: string }[] = [];
+    let messages: ExtractedMessage[] = [];
 
     if (Array.isArray(parsed.messages)) {
       messages = parsed.messages
@@ -123,7 +128,7 @@ Now process the attached image.`
           role: m?.role === 'user' ? 'user' : 'other',
           text: String(m?.text || '').trim(),
         }))
-        .filter(m => m.text.length > 0);
+        .filter((m: ExtractedMessage) => m.text.length > 0);
     }
     // Fallback for alternate structures (e.g., userMessages/otherMessages)
     else if (Array.isArray(parsed.userMessages) || Array.isArray(parsed.otherMessages)) {
@@ -142,7 +147,6 @@ Now process the attached image.`
 
     // Final validation
     if (messages.length === 0) {
-      // Provide specific reason if possible
       const hasMessagesField = parsed && (Array.isArray(parsed.messages) || Array.isArray(parsed.userMessages));
       const errorMsg = hasMessagesField
         ? 'Conversation detected but all messages were empty. Try a clearer screenshot.'
