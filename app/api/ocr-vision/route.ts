@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 
-export const runtime = 'nodejs'; // ✅ required for Buffer
+export const runtime = 'nodejs'; // ✅ needed for Buffer
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ✅ CONVERT IMAGE → BASE64
+    // ✅ IMAGE → BASE64
     const bytes = await image.arrayBuffer();
     const base64 = Buffer.from(bytes).toString('base64');
     const dataUrl = `data:${image.type};base64,${base64}`;
@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
 
     try {
       const response = await openai.chat.completions.create({
-        model: 'gpt-4o-mini', // 💸 cheapest vision model
+        model: 'gpt-4o-mini',
         messages: [
           {
             role: 'user',
@@ -55,8 +55,14 @@ export async function POST(req: NextRequest) {
                 type: 'text',
                 text: `You are an OCR + chat parser.
 
-Extract ALL messages from this screenshot and return STRICT JSON:
+Return ONLY valid JSON.
 
+DO NOT include:
+- explanations
+- markdown
+- text before or after JSON
+
+FORMAT:
 {
   "messages": [
     { "role": "user", "text": "..." },
@@ -65,13 +71,10 @@ Extract ALL messages from this screenshot and return STRICT JSON:
 }
 
 Rules:
-- Right side bubbles = user
-- Left side bubbles = other
-- If unclear, alternate starting with "other"
-- Keep messages in order
-- NO markdown
-- NO explanations
-- ONLY JSON`
+- Right side = user
+- Left side = other
+- Keep order EXACT
+- If unclear, alternate starting with "other"`
               },
               {
                 type: 'image_url',
@@ -97,21 +100,64 @@ Rules:
       );
     }
 
-    // ✅ SAFE PARSE
-    let parsed: any;
+    // ✅ SAFE JSON PARSE (with fallback extraction)
+    let parsed: any = {};
 
     try {
       parsed = JSON.parse(aiText);
     } catch {
-      parsed = {};
+      // 🔥 try extracting JSON from messy response
+      const match = aiText.match(/\{[\s\S]*\}/);
+      if (match) {
+        try {
+          parsed = JSON.parse(match[0]);
+        } catch {
+          parsed = {};
+        }
+      }
     }
 
-    const messages = Array.isArray(parsed.messages)
-      ? parsed.messages.map((m: any) => ({
-          role: m?.role === 'user' ? 'user' : 'other',
-          text: String(m?.text || '').trim(),
-        }))
-      : [];
+    // ✅ NORMALIZE OUTPUT
+    let messages: { role: string; text: string }[] = [];
+
+    if (Array.isArray(parsed.messages)) {
+      messages = parsed.messages.map((m: any) => ({
+        role: m?.role === 'user' ? 'user' : 'other',
+        text: String(m?.text || '').trim(),
+      }));
+    } else if (
+      Array.isArray(parsed.userMessages) ||
+      Array.isArray(parsed.otherMessages)
+    ) {
+      // 🔥 fallback support
+      const users = parsed.userMessages || [];
+      const others = parsed.otherMessages || [];
+
+      const max = Math.max(users.length, others.length);
+
+      for (let i = 0; i < max; i++) {
+        if (others[i]) {
+          messages.push({
+            role: 'other',
+            text: String(others[i]).trim(),
+          });
+        }
+        if (users[i]) {
+          messages.push({
+            role: 'user',
+            text: String(users[i]).trim(),
+          });
+        }
+      }
+    }
+
+    // ❌ If still empty → return helpful error
+    if (messages.length === 0) {
+      return NextResponse.json(
+        { error: 'Could not parse conversation. Try a clearer screenshot.' },
+        { status: 400 }
+      );
+    }
 
     return NextResponse.json({
       success: true,
