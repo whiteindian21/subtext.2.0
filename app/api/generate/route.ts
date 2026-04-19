@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabaseClient';
-import Tesseract from 'tesseract.js';
 
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
@@ -15,7 +14,7 @@ interface DecodeResult {
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    let { userId, text, context, screenshot } = body;
+    let { userId, text, context } = body;  // removed screenshot
 
     // 1. Validation
     if (!userId || !text) {
@@ -33,20 +32,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    // 3. OCR (Image to Text)
-    let extractedScreenshotText = '';
-    if (screenshot && screenshot.startsWith('data:image/')) {
-      try {
-        const base64Data = screenshot.replace(/^data:image\/\w+;base64,/, '');
-        const buffer = Buffer.from(base64Data, 'base64');
-        const { data: { text } } = await Tesseract.recognize(buffer, 'eng');
-        extractedScreenshotText = text.trim();
-      } catch (ocrError) {
-        console.error('OCR failed:', ocrError);
-      }
-    }
-
-    // 4. Dynamic Prompting Logic (Decode)
+    // 3. Dynamic Prompting based on message length
     const isShortMessage = text.length < 40;
     const isLongMessage = text.length > 100;
 
@@ -59,22 +45,28 @@ export async function POST(req: Request) {
       analysisInstruction = "Analyze the standard meaning and subtext of this message.";
     }
 
+    // 4. Build system prompt with conversation & question handling
     const systemMessage = `You are SubText AI, an expert in text psychology and relationship decoding.
- ${analysisInstruction}
+${analysisInstruction}
 
-Analyze the user's message and respond with a JSON object containing:
-- "analysis": A bold explanation of what is really happening (2 sentences max for short texts, 3-4 for long texts).
-- "tone": The detected emotional tone (e.g., dismissive, flirty, anxious, neutral).
-- "hiddenMeaning": What they actually mean but aren't saying directly (1 sentence).
+The user may provide a conversation snippet with labels like "User:" (the person using this app) and "Other:" (the other person). Use these to understand who said what.
+
+If the user asks a question in the "Context" field (e.g., "Am I overreacting?", "Is she being sarcastic?"), answer that question directly within your analysis.
+
+Respond with a JSON object containing:
+- "analysis": A bold explanation of what is really happening (2-4 sentences). If a question was asked, start with the answer.
+- "tone": The detected emotional tone of the OTHER person's message (e.g., dismissive, flirty, anxious, neutral).
+- "hiddenMeaning": What the OTHER person actually means but isn't saying directly (1 sentence).
 - "suggestedVibe": The recommended energy level for the user's reply (e.g., "match energy", "playful", "serious").
 
 Return ONLY valid JSON. No markdown.`;
 
-    let userPrompt = `Decode this message: "${text}"`;
-    if (context) userPrompt += `\nUser Context: ${context}`;
-    if (extractedScreenshotText) userPrompt += `\nScreenshot Context: ${extractedScreenshotText}`;
+    let userPrompt = `Conversation or message to analyze:\n${text}`;
+    if (context && context.trim()) {
+      userPrompt += `\n\nUser's context or question: ${context}`;
+    }
 
-    // 5. Call AI
+    // 5. Call DeepSeek API
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 20000);
     
@@ -92,7 +84,7 @@ Return ONLY valid JSON. No markdown.`;
             { role: 'system', content: systemMessage },
             { role: 'user', content: userPrompt }
           ],
-          temperature: 0.7, // Slightly lower temp for factual analysis
+          temperature: 0.7,
           response_format: { type: 'json_object' }
         }),
         signal: controller.signal
@@ -115,7 +107,6 @@ Return ONLY valid JSON. No markdown.`;
     try {
       const raw = JSON.parse(aiResponseText);
       
-      // Basic validation
       if (!raw.analysis || !raw.tone || !raw.hiddenMeaning) {
         throw new Error('Missing required fields in AI response');
       }
@@ -128,7 +119,6 @@ Return ONLY valid JSON. No markdown.`;
       };
     } catch (parseError) {
       console.error('JSON Parse error:', parseError);
-      // Fallback
       parsedResult = {
         analysis: "Unable to process complex analysis due to format error.",
         tone: "unknown",
