@@ -1,4 +1,6 @@
 /** @type {import('next').NextConfig} */
-const nextConfig = {}
+const nextConfig = {
+  serverExternalPackages: ['openai'], // prevents Next.js from bundling openai
+};
 
-export default nextConfig
+export default nextConfig;
