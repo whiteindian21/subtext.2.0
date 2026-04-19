@@ -12,6 +12,24 @@ type ExtractedMessage = {
   text: string;
 };
 
+// -------------------------------
+// 🧠 SAFE JSON PARSER
+// -------------------------------
+function safeParse(input: string) {
+  try {
+    return JSON.parse(input);
+  } catch {}
+
+  const match = input.match(/\{[\s\S]*\}/);
+  if (match) {
+    try {
+      return JSON.parse(match[0]);
+    } catch {}
+  }
+
+  return null;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData();
@@ -28,47 +46,44 @@ export async function POST(req: NextRequest) {
     // Convert image → base64
     const buffer = Buffer.from(await image.arrayBuffer());
     const base64 = buffer.toString('base64');
-
     const dataUrl = `data:${image.type};base64,${base64}`;
 
     // -------------------------------
-    // STEP 1: PRIMARY OCR + JSON
+    // STEP 1: OCR + AI
     // -------------------------------
     let aiText = '';
 
     try {
       const response = await openai.chat.completions.create({
-        model: 'gpt-4o', // 🔥 upgrade from mini
+        model: 'gpt-4o',
         messages: [
           {
             role: 'system',
-            content: `You are a strict OCR + JSON extraction engine.
+            content: `You extract chat messages from screenshots.
 
-You ONLY return valid JSON.
-No explanations.
+Return ONLY JSON.
+No explanation.
 No markdown.
-No extra text.
 
-If unsure → return: {"messages":[]}`
+If unsure return:
+{"messages":[]}`
           },
           {
             role: 'user',
             content: [
               {
                 type: 'text',
-                text: `Extract chat messages from this screenshot.
+                text: `Extract chat messages.
 
-FORMAT STRICTLY:
+STRICT FORMAT:
 {"messages":[{"role":"other","text":"..."},{"role":"user","text":"..."}]}
 
-RULES:
-- Right side = "user"
-- Left side = "other"
-- Keep order top → bottom
-- No empty messages
-- No trailing commas
-- No extra keys
-- If unclear → return {"messages":[]}`
+Rules:
+- Right = user
+- Left = other
+- Keep order
+- No empty text
+- No trailing commas`
               },
               {
                 type: 'image_url',
@@ -77,47 +92,48 @@ RULES:
             ]
           }
         ],
-        max_tokens: 1500,
-        response_format: { type: 'json_object' },
+        max_tokens: 1500
       });
 
       aiText = response.choices?.[0]?.message?.content || '';
+
       if (!aiText) throw new Error('Empty AI response');
 
     } catch (err) {
       console.error('OCR ERROR:', err);
-      return NextResponse.json({ error: 'OCR failed' }, { status: 500 });
+
+      return NextResponse.json({
+        success: true,
+        messages: [],
+        error: 'OCR failed'
+      });
     }
 
-    console.log("RAW AI:", aiText);
+    console.log("🧠 RAW AI OUTPUT:\n", aiText);
 
     // -------------------------------
-    // STEP 2: CLEAN JSON STRING
+    // STEP 2: CLEAN
     // -------------------------------
     let clean = aiText
       .replace(/```json/g, '')
       .replace(/```/g, '')
       .trim();
 
-    // Remove trailing commas
     clean = clean
       .replace(/,\s*}/g, '}')
       .replace(/,\s*]/g, ']');
 
-    // Extract JSON safely
-    const match = clean.match(/\{[\s\S]*\}/);
-    if (match) clean = match[0];
+    // -------------------------------
+    // STEP 3: PARSE
+    // -------------------------------
+    let parsed = safeParse(clean);
 
-    let parsed: any = null;
+    // -------------------------------
+    // STEP 4: REPAIR (if needed)
+    // -------------------------------
+    if (!parsed) {
+      console.warn("⚠️ PRIMARY PARSE FAILED → attempting repair");
 
-    try {
-      parsed = JSON.parse(clean);
-    } catch (err) {
-      console.warn("PRIMARY PARSE FAILED");
-
-      // -------------------------------
-      // STEP 3: AUTO-REPAIR PASS (🔥 KEY)
-      // -------------------------------
       try {
         const repair = await openai.chat.completions.create({
           model: 'gpt-4o',
@@ -127,35 +143,36 @@ RULES:
               content: `Fix invalid JSON.
 
 Return ONLY valid JSON.
-Do not explain anything.`
+No explanation.
+
+Must match:
+{"messages":[{"role":"other","text":"..."},{"role":"user","text":"..."}]}`
             },
             {
               role: 'user',
-              content: clean
+              content: `Fix this JSON:\n${clean}`
             }
           ],
-          max_tokens: 1000,
+          max_tokens: 1000
         });
 
         const fixed = repair.choices?.[0]?.message?.content || '';
-        parsed = JSON.parse(fixed);
 
-      } catch (repairErr) {
-        console.error("REPAIR FAILED:", repairErr);
+        console.log("🔧 REPAIRED JSON:\n", fixed);
 
-        return NextResponse.json(
-          { error: 'Could not parse conversation. Try a clearer screenshot.' },
-          { status: 400 }
-        );
+        parsed = safeParse(fixed);
+
+      } catch (err) {
+        console.error("❌ REPAIR FAILED:", err);
       }
     }
 
     // -------------------------------
-    // STEP 4: NORMALIZE
+    // STEP 5: NORMALIZE
     // -------------------------------
     let messages: ExtractedMessage[] = [];
 
-    if (Array.isArray(parsed?.messages)) {
+    if (parsed && Array.isArray(parsed.messages)) {
       messages = parsed.messages
         .map((m: any) => ({
           role: m?.role === 'user' ? 'user' : 'other',
@@ -165,13 +182,13 @@ Do not explain anything.`
     }
 
     // -------------------------------
-    // STEP 5: FINAL SAFETY
+    // STEP 6: FINAL SAFE RETURN
     // -------------------------------
     if (messages.length === 0) {
       return NextResponse.json({
         success: true,
         messages: [],
-        warning: 'No clear conversation detected'
+        debug: aiText // 🔥 shows what AI returned
       });
     }
 
@@ -183,9 +200,10 @@ Do not explain anything.`
   } catch (err: any) {
     console.error('SERVER ERROR:', err);
 
-    return NextResponse.json(
-      { error: err?.message || 'Server error' },
-      { status: 500 }
-    );
+    return NextResponse.json({
+      success: true,
+      messages: [],
+      error: err?.message || 'Server error'
+    });
   }
 }
