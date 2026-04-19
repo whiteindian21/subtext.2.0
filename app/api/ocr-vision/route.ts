@@ -1,74 +1,119 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: OPENAI_API_KEY,
 });
 
 export async function POST(req: NextRequest) {
   try {
+    // ✅ ENV SAFETY (prevents GitHub CI failures)
+    if (!OPENAI_API_KEY) {
+      return NextResponse.json(
+        { error: 'Missing OPENAI_API_KEY' },
+        { status: 500 }
+      );
+    }
+
     const formData = await req.formData();
     const image = formData.get('image') as File | null;
-    
+
+    // ✅ VALIDATION
     if (!image) {
-      return NextResponse.json({ error: 'No image provided' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'No image provided' },
+        { status: 400 }
+      );
     }
 
-    // Convert image to base64
-    const bytes = await image.arrayBuffer();
-    const buffer = Buffer.from(bytes);
-    const base64Image = buffer.toString('base64');
-    const mimeType = image.type;
-    const dataUrl = `data:${mimeType};base64,${base64Image}`;
+    if (!image.type?.startsWith('image/')) {
+      return NextResponse.json(
+        { error: 'Invalid file type' },
+        { status: 400 }
+      );
+    }
 
-    // Call OpenAI with vision-capable model (cheapest: gpt-4o-mini)
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini', // cheapest vision model
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: `Extract the conversation from this chat screenshot. Return a JSON object with exactly two fields:
-- "userMessages": an array of strings (messages sent by the user, i.e., the person whose phone/chat is being viewed)
-- "otherMessages": an array of strings (messages from the other person)
+    // ✅ SAFE BUFFER (fixes Node/Edge issues)
+    const bytes = await image.arrayBuffer();
+    const base64Image = Buffer.from(bytes).toString('base64');
+    const dataUrl = `data:${image.type};base64,${base64Image}`;
+
+    let aiText = '';
+
+    try {
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: `Extract the conversation from this chat screenshot.
+
+Return STRICT JSON with:
+- "userMessages": string[]
+- "otherMessages": string[]
 
 Rules:
-- If you see chat bubbles, right-aligned bubbles are usually the user, left-aligned are the other person.
-- If there are names or labels (e.g., "Me:", "You:", "John:"), use them to determine roles.
-- If you cannot distinguish roles, assume the first message is from "other" and alternate.
-- Include every message from the visible screenshot.
-- Do not include any extra text, commentary, or markdown. Output only valid JSON.`
-            },
-            {
-              type: 'image_url',
-              image_url: { url: dataUrl }
-            }
-          ]
-        }
-      ],
-      response_format: { type: 'json_object' },
-      max_tokens: 1000,
-    });
+- Right side = user, left side = other
+- If unclear, alternate starting with "other"
+- Include ALL messages
+- NO markdown, NO explanation, ONLY JSON`
+              },
+              {
+                type: 'image_url',
+                image_url: { url: dataUrl }
+              }
+            ]
+          }
+        ],
+        response_format: { type: 'json_object' },
+        max_tokens: 1000,
+      });
 
-    const content = response.choices[0]?.message?.content;
-    if (!content) {
-      return NextResponse.json({ error: 'No response from AI' }, { status: 500 });
+      aiText = response?.choices?.[0]?.message?.content || '';
+
+      if (!aiText) {
+        throw new Error('Empty AI response');
+      }
+
+    } catch (err: any) {
+      console.error('OpenAI ERROR:', err);
+
+      return NextResponse.json(
+        { error: 'AI processing failed' },
+        { status: 500 }
+      );
     }
 
-    const parsed = JSON.parse(content);
-    // Ensure arrays exist
+    // ✅ SAFE PARSE (prevents crashes)
+    let parsed: any;
+
+    try {
+      parsed = JSON.parse(aiText);
+    } catch {
+      parsed = {};
+    }
+
     const result = {
-      userMessages: Array.isArray(parsed.userMessages) ? parsed.userMessages : [],
-      otherMessages: Array.isArray(parsed.otherMessages) ? parsed.otherMessages : [],
+      userMessages: Array.isArray(parsed.userMessages)
+        ? parsed.userMessages.map((m: any) => String(m))
+        : [],
+      otherMessages: Array.isArray(parsed.otherMessages)
+        ? parsed.otherMessages.map((m: any) => String(m))
+        : [],
     };
-    
+
     return NextResponse.json(result);
+
   } catch (error: any) {
     console.error('Vision OCR error:', error);
+
     return NextResponse.json(
-      { error: error.message || 'Failed to process image' },
+      { error: error?.message || 'Failed to process image' },
       { status: 500 }
     );
   }
