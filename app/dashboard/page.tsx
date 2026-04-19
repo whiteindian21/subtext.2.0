@@ -108,7 +108,7 @@ export default function Dashboard() {
     if (data) setCredits(data.credits);
   };
 
-  // NEW: Vision OCR using GPT-4o-mini
+  // UPDATED: Vision OCR using GPT-4o-mini with new messages array format
   const performVisionOCR = async (file: File) => {
     setOcrLoading(true);
     try {
@@ -127,19 +127,21 @@ export default function Dashboard() {
         return;
       }
       
-      // Format conversation with labels
-      let formatted = '';
-      if (data.userMessages && data.userMessages.length) {
-        formatted += `User:\n${data.userMessages.join('\n')}\n\n`;
-      }
-      if (data.otherMessages && data.otherMessages.length) {
-        formatted += `Other:\n${data.otherMessages.join('\n')}`;
-      }
+      // New logic: use messages array and convert to readable format
+      const messages = data.messages;
       
-      if (formatted.trim()) {
-        setInput(formatted);
+      if (messages && Array.isArray(messages) && messages.length > 0) {
+        // Format each message as "You: text" or "Them: text"
+        const formattedLines = messages.map((msg: { role: string; text: string }) => {
+          const speaker = msg.role === 'user' ? 'You' : 'Them';
+          return `${speaker}: ${msg.text}`;
+        });
+        
+        const formattedConversation = formattedLines.join('\n\n');
+        setInput(formattedConversation);
         showToast('Conversation extracted with speaker labels!', 'success');
       } else {
+        // No messages found – show error as requested
         showToast('Could not parse conversation. Try a clearer screenshot.', 'error');
       }
     } catch (err) {
