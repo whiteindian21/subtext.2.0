@@ -5,13 +5,12 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabaseClient';
 import { User } from '@supabase/supabase-js';
-import Tesseract from 'tesseract.js';
 import { 
   Sparkles, LogOut, Copy, Loader2, Zap, MessageSquare, Brain,
   X, Settings, CheckCircle, Info, ChevronRight, Upload, Trash2
 } from 'lucide-react';
 
-// Types
+// Types (same as before)
 type OutputType = 'decode' | 'reply';
 type ToastType = 'success' | 'error';
 
@@ -32,7 +31,7 @@ interface ReplyResult {
   replies: ReplyItem[];
 }
 
-// Tone mapping for internal use (no longer shown to user)
+// Tone mapping (unchanged)
 const TONE_OPTIONS = [
   { label: 'Confident', emoji: '😎', category: 'confident', vibeMatch: ['serious', 'confident', 'aggressive'] },
   { label: 'Funny', emoji: '😂', category: 'funny', vibeMatch: ['playful', 'sarcastic'] },
@@ -48,19 +47,17 @@ const TONE_OPTIONS = [
   { label: 'Flirty', emoji: '😉', category: 'flirty', vibeMatch: ['romantic', 'playful'] },
 ];
 
-// Helper to pick the best tone based on suggestedVibe from decode result
 const getBestToneForVibe = (suggestedVibe: string): string => {
   const vibeLower = suggestedVibe.toLowerCase();
   const match = TONE_OPTIONS.find(tone => 
     tone.vibeMatch.some(match => vibeLower.includes(match) || match === vibeLower)
   );
-  return match?.label || 'Chill'; // fallback tone
+  return match?.label || 'Chill';
 };
 
 export default function Dashboard() {
   const router = useRouter();
   
-  // State
   const [user, setUser] = useState<User | null>(null);
   const [credits, setCredits] = useState<number>(0);
   const [input, setInput] = useState<string>('');
@@ -70,15 +67,14 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<'decode' | 'reply'>('decode');
   const [toast, setToast] = useState<{ message: string; type: ToastType } | null>(null);
   
-  // Screenshot
+  // Screenshot states
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [ocrLoading, setOcrLoading] = useState<boolean>(false);
 
-  // Store last decode result for context-aware replies
   const [lastDecodeResult, setLastDecodeResult] = useState<DecodeResult | null>(null);
 
-  // Auth & Credits
+  // Auth & Credits (unchanged)
   useEffect(() => {
     const checkUser = async () => {
       const { data: { session } } = await supabase.auth.getSession();
@@ -112,7 +108,48 @@ export default function Dashboard() {
     if (data) setCredits(data.credits);
   };
 
-  // OCR
+  // NEW: Vision OCR using GPT-4o-mini
+  const performVisionOCR = async (file: File) => {
+    setOcrLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append('image', file);
+      
+      const res = await fetch('/api/ocr-vision', {
+        method: 'POST',
+        body: formData,
+      });
+      
+      const data = await res.json();
+      
+      if (data.error) {
+        showToast(data.error, 'error');
+        return;
+      }
+      
+      // Format conversation with labels
+      let formatted = '';
+      if (data.userMessages && data.userMessages.length) {
+        formatted += `User:\n${data.userMessages.join('\n')}\n\n`;
+      }
+      if (data.otherMessages && data.otherMessages.length) {
+        formatted += `Other:\n${data.otherMessages.join('\n')}`;
+      }
+      
+      if (formatted.trim()) {
+        setInput(formatted);
+        showToast('Conversation extracted with speaker labels!', 'success');
+      } else {
+        showToast('Could not parse conversation. Try a clearer screenshot.', 'error');
+      }
+    } catch (err) {
+      console.error('Vision OCR error:', err);
+      showToast('Failed to extract text from image.', 'error');
+    } finally {
+      setOcrLoading(false);
+    }
+  };
+
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -123,27 +160,7 @@ export default function Dashboard() {
     setSelectedImage(file);
     const previewUrl = URL.createObjectURL(file);
     setImagePreview(previewUrl);
-    performOCR(file);
-  };
-
-  const performOCR = async (file: File) => {
-    setOcrLoading(true);
-    try {
-      const { data: { text } } = await Tesseract.recognize(file, 'eng', {
-        logger: (m) => console.log(m),
-      });
-      if (text.trim()) {
-        setInput(text);
-        showToast('Text extracted from screenshot!', 'success');
-      } else {
-        showToast('No text found. Try a clearer screenshot.', 'error');
-      }
-    } catch (err) {
-      console.error('OCR error:', err);
-      showToast('Failed to extract text.', 'error');
-    } finally {
-      setOcrLoading(false);
-    }
+    performVisionOCR(file);
   };
 
   const clearImage = () => {
@@ -152,7 +169,7 @@ export default function Dashboard() {
     setImagePreview(null);
   };
 
-  // Main decode action
+  // Main decode action (unchanged logic)
   const handleDecode = async () => {
     if (!input.trim()) {
       showToast('Please paste a message or upload a screenshot', 'error');
@@ -196,7 +213,6 @@ export default function Dashboard() {
     }
   };
 
-  // Generate replies using the decode context (no tone selection)
   const generateRepliesFromDecode = async () => {
     if (!lastDecodeResult) {
       showToast('Please decode the message first', 'error');
@@ -269,13 +285,13 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-white font-sans selection:bg-purple-500/30 relative">
-      {/* Ambient background */}
+      {/* Ambient background (unchanged) */}
       <div className="fixed inset-0 pointer-events-none">
         <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-purple-900/20 via-zinc-950 to-zinc-950 opacity-50" />
         <div className="absolute inset-0 opacity-20" style={{ backgroundImage: `radial-gradient(circle at 1px 1px, rgba(255,255,255,0.05) 1px, transparent 0)`, backgroundSize: `40px 40px` }} />
       </div>
 
-      {/* Navbar */}
+      {/* Navbar (unchanged) */}
       <nav className="fixed top-0 w-full z-50 border-b border-white/5 bg-zinc-950/70 backdrop-blur-xl supports-[backdrop-filter]:bg-zinc-950/60">
         <div className="max-w-5xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3 cursor-pointer" onClick={() => router.push('/')}>
@@ -307,7 +323,7 @@ export default function Dashboard() {
 
       <main className="relative z-10 pt-28 pb-20 px-4 max-w-4xl mx-auto">
         
-        {/* Header */}
+        {/* Header (unchanged) */}
         <div className="text-center mb-10 animate-fade-in-up">
           <h1 className="text-4xl md:text-5xl font-bold mb-4 tracking-tight">
             Decode the <span className="bg-gradient-to-r from-purple-400 via-pink-400 to-indigo-400 bg-clip-text text-transparent">hidden meaning</span>
@@ -336,7 +352,7 @@ export default function Dashboard() {
             {ocrLoading && (
               <div className="flex items-center gap-2 text-sm text-zinc-400">
                 <Loader2 size={14} className="animate-spin" />
-                Extracting text...
+                Extracting conversation with AI...
               </div>
             )}
             {imagePreview && !ocrLoading && (
@@ -349,21 +365,21 @@ export default function Dashboard() {
             )}
           </div>
           
-          {/* Context Input */}
+          {/* Context Input - now supports questions */}
           <div className="group mt-6">
             <label className="flex items-center gap-2 text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 group-focus-within:text-purple-400 transition-colors">
-              <Info size={12} /> Context (optional)
+              <Info size={12} /> Context or Question (optional)
             </label>
             <textarea
               className="w-full bg-black/20 border border-white/5 rounded-xl p-4 text-sm placeholder-zinc-600 focus:outline-none focus:border-purple-500/30 focus:bg-black/40 transition resize-none"
-              placeholder="Add context: 'We've been dating for 3 months', 'She ghosted me', 'This is my boss'..."
+              placeholder="Add context or ask a question about the conversation, e.g., 'Am I overreacting?', 'What does she really mean?', 'Is this sarcastic?'"
               value={context}
               onChange={(e) => setContext(e.target.value)}
               rows={2}
             />
           </div>
 
-          {/* Single Action Button: Decode */}
+          {/* Decode Button */}
           <div className="mt-8">
             <button
               onClick={handleDecode}
@@ -376,11 +392,10 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Results Section */}
+        {/* Results Section (unchanged) */}
         {output && (
           <div id="results" className="animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-8">
             
-            {/* DECODE RESULT */}
             {output.type === 'decode' && (
               <div className="relative group">
                 <div className="absolute -inset-0.5 bg-gradient-to-r from-purple-600 to-pink-600 rounded-[26px] blur opacity-20 group-hover:opacity-40 transition duration-700"></div>
@@ -419,7 +434,6 @@ export default function Dashboard() {
                   
                   <div className="h-px w-full bg-gradient-to-r from-transparent via-white/10 to-transparent my-10"></div>
                   
-                  {/* Generate Replies Button - uses decode context, no tone selection */}
                   <button
                     onClick={generateRepliesFromDecode}
                     disabled={loading}
@@ -438,7 +452,6 @@ export default function Dashboard() {
               </div>
             )}
 
-            {/* REPLY RESULT */}
             {output.type === 'reply' && (
               <div className="space-y-6">
                 <div className="flex items-center justify-between px-2">
