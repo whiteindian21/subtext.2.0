@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabaseClient';
-import Tesseract from 'tesseract.js';
 
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
@@ -13,7 +12,7 @@ interface RawAIResponse {
   replies: Array<{ text?: unknown; tone?: unknown; explanation?: unknown }>;
 }
 
-// Helper to parse enhanced context
+// Helper to parse enhanced context (unchanged)
 function parseContext(context: string): {
   suggestedVibe?: string;
   hiddenMeaning?: string;
@@ -37,7 +36,7 @@ function parseContext(context: string): {
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    let { userId, text, tone, context, screenshot } = body;
+    let { userId, text, tone, context } = body; // removed screenshot
 
     // 1. Validation
     if (!userId || !text || !tone) {
@@ -45,7 +44,6 @@ export async function POST(req: Request) {
     }
 
     tone = tone.toLowerCase();
-    // Expanded valid tones list (12 tones)
     const validTones = [
       'confident', 'funny', 'savage', 'chill', 'sarcastic', 'romantic',
       'supportive', 'dry', 'energetic', 'mysterious', 'apologetic', 'flirty'
@@ -60,9 +58,8 @@ export async function POST(req: Request) {
     let overrideInstruction = '';
 
     if (decoded.suggestedVibe) {
-      // Map suggested vibe to the most appropriate tone (fallback)
       const vibeToToneMap: Record<string, string> = {
-        serious: 'confident',      // or 'dry' – you decide
+        serious: 'confident',
         playful: 'funny',
         romantic: 'romantic',
         sarcastic: 'sarcastic',
@@ -94,20 +91,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    // 4. OCR (if screenshot provided)
-    let extractedScreenshotText = '';
-    if (screenshot && screenshot.startsWith('data:image/')) {
-      try {
-        const base64Data = screenshot.replace(/^data:image\/\w+;base64,/, '');
-        const buffer = Buffer.from(base64Data, 'base64');
-        const { data: { text } } = await Tesseract.recognize(buffer, 'eng');
-        extractedScreenshotText = text.trim();
-      } catch (ocrError) {
-        console.error('OCR failed:', ocrError);
-      }
-    }
-
-    // 5. Dynamic Prompting Logic (Length based)
+    // 4. Dynamic Prompting Logic (Length based)
     const isShortMessage = text.length < 50;
     const isLongMessage = text.length > 120;
 
@@ -136,6 +120,22 @@ export async function POST(req: Request) {
       flirty: "playful, teasing, and charming (lighthearted romantic interest)",
     };
 
+    // 5. Prepare the conversation for the AI
+    // The 'text' may contain a full conversation with User:/Other: labels.
+    // Extract the last message from "Other" as the primary message to reply to,
+    // but also provide full context.
+    let conversationContext = text;
+    let lastOtherMessage = '';
+    const otherMatches = text.match(/Other:\s*(.*?)(?=\n(?:User:|Other:)|\n*$)/gs);
+    if (otherMatches && otherMatches.length > 0) {
+      lastOtherMessage = otherMatches[otherMatches.length - 1].replace(/^Other:\s*/, '').trim();
+      conversationContext = `Full conversation:\n${text}\n\nMost recent message from the other person: "${lastOtherMessage}"`;
+    } else {
+      // If no labels, assume entire text is from the other person
+      lastOtherMessage = text;
+      conversationContext = `Message from other person: "${text}"`;
+    }
+
     const systemMessage = `You are SubText AI, a master of text message psychology.
 Your task is to generate 5 reply options in a ${toneMap[effectiveTone]} tone.
 ${lengthInstruction}
@@ -151,16 +151,17 @@ ${
     : ''
 }
 
+You will be given a conversation snippet. The user (the person using this app) is labeled "User:". The other person is labeled "Other:". Generate replies AS the user to the other person. Ignore any "User:" lines when crafting replies – you are replying FOR the user.
+
 Return a STRICT JSON object with a "replies" array containing objects with:
-- "text": The actual reply string.
+- "text": The actual reply string (as the user).
 - "tone": Specific sub-tone used (e.g., "teasing", "caring", "cold").
 - "explanation": Brief reason why this works (optional).
 
 Return ONLY valid JSON. No markdown formatting.`;
 
-    let userPrompt = `Original Message: "${text}"\nTarget Tone: ${effectiveTone}`;
-    if (context) userPrompt += `\nAdditional Context: ${context}`;
-    if (extractedScreenshotText) userPrompt += `\nContext from Screenshot: ${extractedScreenshotText}`;
+    let userPrompt = `${conversationContext}\nTarget Tone: ${effectiveTone}`;
+    if (context) userPrompt += `\nAdditional Context/Decoded Analysis: ${context}`;
 
     // 6. Call AI
     const controller = new AbortController();
