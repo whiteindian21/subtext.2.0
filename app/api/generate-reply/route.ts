@@ -7,13 +7,14 @@ const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
 interface Reply {
   text: string;
   tone: string;
+  score: number; // ⭐ intelligence score
 }
 
 interface ReplyResult {
   replies: Reply[];
 }
 
-// ✅ Extract JSON safely (handles messy AI output)
+// ✅ Safe JSON extraction
 function extractJSON(text: string) {
   try {
     return JSON.parse(text);
@@ -40,7 +41,7 @@ async function fetchWithRetry(fetchFn: () => Promise<Response>, retries = 2) {
   throw new Error('Failed after retries');
 }
 
-// ✅ Parse context (from decode route)
+// ✅ Context parser
 function parseContext(context: string) {
   const result: any = {};
   if (!context) return result;
@@ -50,6 +51,9 @@ function parseContext(context: string) {
 
   const hiddenMatch = context.match(/\[Hidden Meaning\]\s*(.*?)(?:\n|$)/i);
   if (hiddenMatch) result.hiddenMeaning = hiddenMatch[1].trim();
+
+  const analysisMatch = context.match(/\[Decoded Analysis\]\s*(.*?)(?:\n|$)/i);
+  if (analysisMatch) result.analysis = analysisMatch[1].trim();
 
   return result;
 }
@@ -66,16 +70,19 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Missing fields' }, { status: 400 });
     }
 
+    // ✅ Normalize tone
+    let normalizedTone = String(tone).toLowerCase().trim();
+
     const validTones = [
       'confident','funny','savage','chill','sarcastic','romantic',
       'supportive','dry','energetic','mysterious','apologetic','flirty'
     ];
 
-    if (!validTones.includes(tone)) {
-      return NextResponse.json({ error: 'Invalid tone' }, { status: 400 });
+    if (!validTones.includes(normalizedTone)) {
+      normalizedTone = 'chill';
     }
 
-    // ✅ user check
+    // ✅ User check
     const { data: user } = await supabase
       .from('profiles')
       .select('id')
@@ -86,53 +93,9 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    // ✅ context influence
     const decoded = parseContext(context);
 
-    let effectiveTone = tone;
-
-    if (decoded.suggestedVibe) {
-      const map: Record<string, string> = {
-        serious: 'confident',
-        playful: 'funny',
-        romantic: 'romantic',
-        sarcastic: 'sarcastic',
-        aggressive: 'savage',
-        casual: 'chill',
-        caring: 'supportive',
-      };
-
-      if (map[decoded.suggestedVibe]) {
-        effectiveTone = map[decoded.suggestedVibe];
-      }
-    }
-
-    // ✅ length rules
-    const isShort = text.length < 50;
-    const isLong = text.length > 120;
-
-    const lengthInstruction = isShort
-      ? "Replies must be under 12 words."
-      : isLong
-      ? "Replies should be 2-3 short sentences."
-      : "Replies should be 1-2 sentences.";
-
-    const toneMap: Record<string, string> = {
-      confident: "confident and composed",
-      funny: "playful and witty",
-      savage: "bold and slightly confrontational",
-      chill: "casual and relaxed",
-      sarcastic: "dry and sarcastic",
-      romantic: "warm and flirty",
-      supportive: "empathetic and caring",
-      dry: "short and blunt",
-      energetic: "excited and expressive",
-      mysterious: "intriguing and slightly vague",
-      apologetic: "sincere and accountable",
-      flirty: "playful and teasing",
-    };
-
-    // ✅ extract last message if convo
+    // ✅ Extract last message
     const matches = text.match(/Other:\s*([\s\S]*?)(?=\n(?:User:|Other:)|\n*$)/g);
 
     let conversationContext = text;
@@ -145,90 +108,112 @@ export async function POST(req: Request) {
       conversationContext = `Conversation:\n${text}\n\nReply to:\n"${last}"`;
     }
 
-    // 🔥 NEW POWERFUL PROMPT
+    // ✅ Smart length logic (TEXT + CONTEXT)
+    const totalLength = (text + (context || '')).length;
+
+    const isShort = totalLength < 80;
+    const isLong = totalLength > 200;
+
+    const lengthInstruction = isShort
+      ? "Replies must be under 12 words."
+      : isLong
+      ? "Replies should be 2–3 thoughtful sentences with emotional awareness."
+      : "Replies should be 1–2 sentences.";
+
+    // 🔥 FINAL ADVANCED PROMPT
     const systemMessage = `
-You are SubText AI — an expert in modern texting, attraction psychology, and emotional intelligence.
+You are SubText AI — an expert in texting, attraction psychology, and emotional intelligence.
 
-Your job is to generate replies that are:
-- natural
-- emotionally aware
-- context-sensitive
-- actually worth sending
+Your goal is to generate replies that feel REAL, NATURAL, and HIGH VALUE.
 
 ---
 
-STEP 1: Understand the message
-Before writing replies, internally figure out:
-- what the other person is feeling
-- what they actually mean (not just what they said)
-- the emotional context (serious, playful, distant, upset, etc.)
+STEP 1: Understand deeply (internal)
+- what are they feeling?
+- what do they actually mean?
+- what is the emotional situation?
 
 ---
 
-STEP 2: Reply with intent
-Each reply should have a clear purpose:
+STEP 2: Respond with intent
+Each reply must:
 - move the conversation forward
 - reduce tension OR build attraction
-- show awareness without over-explaining
+- feel intentional, not random
 
 ---
 
-CORE RULES:
-- never sound robotic or scripted
-- avoid generic lines like:
-  "I understand", "that makes sense", "I'm sorry you feel that way"
-- avoid over-explaining or long paragraphs
-- avoid try-hard or needy energy
-- no emojis unless they feel natural
+RULES:
+- no robotic phrasing
+- no generic lines like "I understand"
+- no over-explaining
+- no needy energy
+- sound like a real person texting
 
 ---
 
 STYLE:
-- casual, human texting tone
-- lowercase is okay when natural
+- casual tone
+- lowercase is fine
 - subtle emotion > obvious emotion
-- keep it short and clean
 
 ---
 
-QUALITY BAR:
-Every reply should feel like:
-"yeah… that’s exactly what I should send"
+CONTEXT AWARENESS:
+- match the length and depth of the message
+- long emotional messages → deeper, thoughtful replies
+- short casual messages → short replies
+- match effort level
 
-If it sounds like AI, rewrite it.
+---
+
+EMOTIONAL INTELLIGENCE:
+- serious/emotional → empathetic + grounded
+- playful → light + fun
+- tense → calm + confident
+- avoid jokes if situation is serious
 
 ---
 
 DIVERSITY:
-Generate 5 replies, each with a different angle:
-- one confident
-- one playful
-- one curious
-- one calm
-- one bold
+Generate 5 DISTINCT replies:
+- confident
+- playful
+- curious
+- calm
+- bold
 
-Each reply must feel DISTINCT, not reworded versions of the same idea.
-
----
-
-LENGTH:
-- short messages: under 12 words
-- medium: 1 sentence
-- long: max 2 short sentences
+Each must feel completely different.
 
 ---
 
-OUTPUT FORMAT (STRICT JSON):
+QUALITY CHECK:
+If it sounds like AI → rewrite it.
+
+---
+
+${lengthInstruction}
+
+---
+
+CONTEXT:
+Hidden meaning: ${decoded.hiddenMeaning || 'unknown'}
+Analysis: ${decoded.analysis || 'unknown'}
+
+---
+
+OUTPUT STRICT JSON:
 {
   "replies": [
-    { "text": "...", "tone": "..." }
+    { "text": "...", "tone": "${normalizedTone}", "score": number }
   ]
 }
+`;
 
     const userPrompt = `
 ${conversationContext}
 
-Target tone: ${toneMap[effectiveTone]}
+Target tone: ${normalizedTone}
 `;
 
     // ✅ API call
@@ -273,30 +258,32 @@ Target tone: ${toneMap[effectiveTone]}
       return NextResponse.json({ error: 'AI failed' }, { status: 500 });
     }
 
-    // ✅ parse safely
+    // ✅ Parse safely
     let parsed: ReplyResult;
 
     const raw = extractJSON(aiText);
 
     if (raw && Array.isArray(raw.replies)) {
-      parsed = {
-        replies: raw.replies.slice(0, 5).map((r: any) => ({
-          text: String(r.text || '').trim(),
-          tone: String(r.tone || effectiveTone),
-        })),
-      };
+      const replies = raw.replies.slice(0, 5).map((r: any) => ({
+        text: String(r.text || '').trim(),
+        tone: normalizedTone,
+        score: Number(r.score || 0),
+      }));
+
+      // ⭐ Sort by intelligence score
+      replies.sort((a: Reply, b: Reply) => b.score - a.score);
+
+      parsed = { replies };
+
     } else {
       parsed = {
         replies: [
-          {
-            text: "not sure what to say here…",
-            tone: effectiveTone,
-          },
+          { text: "not sure what to say here…", tone: normalizedTone, score: 0 }
         ],
       };
     }
 
-    // ✅ deduct credits only if valid
+    // ✅ Deduct credits
     if (parsed.replies.length > 0) {
       try {
         await supabase.rpc('deduct_credits', {
