@@ -4,10 +4,43 @@ import { supabase } from '@/lib/supabaseClient';
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
 
-interface ReplyResult {
-  replies: Array<{ text: string; tone: string; explanation?: string }>;
+interface Reply {
+  text: string;
+  tone: string;
 }
 
+interface ReplyResult {
+  replies: Reply[];
+}
+
+// ✅ Extract JSON safely (handles messy AI output)
+function extractJSON(text: string) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        return JSON.parse(match[0]);
+      } catch {}
+    }
+  }
+  return null;
+}
+
+// ✅ Retry logic
+async function fetchWithRetry(fetchFn: () => Promise<Response>, retries = 2) {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const res = await fetchFn();
+      if (res.ok) return res;
+    } catch {}
+    await new Promise(r => setTimeout(r, 400));
+  }
+  throw new Error('Failed after retries');
+}
+
+// ✅ Parse context (from decode route)
 function parseContext(context: string) {
   const result: any = {};
   if (!context) return result;
@@ -18,34 +51,20 @@ function parseContext(context: string) {
   const hiddenMatch = context.match(/\[Hidden Meaning\]\s*(.*?)(?:\n|$)/i);
   if (hiddenMatch) result.hiddenMeaning = hiddenMatch[1].trim();
 
-  const analysisMatch = context.match(/\[Decoded Analysis\]\s*(.*?)(?:\n|$)/i);
-  if (analysisMatch) result.analysis = analysisMatch[1].trim();
-
   return result;
 }
 
 export async function POST(req: Request) {
   try {
-    // ✅ ENV SAFETY
     if (!DEEPSEEK_API_KEY) {
-      return NextResponse.json(
-        { error: 'Missing DEEPSEEK_API_KEY' },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: 'Missing API key' }, { status: 500 });
     }
 
-    const body = await req.json();
-    let { userId, text, tone, context } = body;
+    const { userId, text, tone, context } = await req.json();
 
-    // ✅ VALIDATION
     if (!userId || !text || !tone) {
-      return NextResponse.json(
-        { error: 'Missing required fields' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Missing fields' }, { status: 400 });
     }
-
-    tone = String(tone).toLowerCase();
 
     const validTones = [
       'confident','funny','savage','chill','sarcastic','romantic',
@@ -56,8 +75,20 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Invalid tone' }, { status: 400 });
     }
 
-    // ✅ CONTEXT
+    // ✅ user check
+    const { data: user } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('id', userId)
+      .single();
+
+    if (!user) {
+      return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    }
+
+    // ✅ context influence
     const decoded = parseContext(context);
+
     let effectiveTone = tone;
 
     if (decoded.suggestedVibe) {
@@ -69,53 +100,39 @@ export async function POST(req: Request) {
         aggressive: 'savage',
         casual: 'chill',
         caring: 'supportive',
-        energetic: 'energetic',
-        mysterious: 'mysterious',
-        apologetic: 'apologetic',
-        flirty: 'flirty',
       };
+
       if (map[decoded.suggestedVibe]) {
         effectiveTone = map[decoded.suggestedVibe];
       }
     }
 
-    // ✅ USER CHECK
-    const { data: userExists, error: userError } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('id', userId)
-      .single();
-
-    if (userError || !userExists) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 });
-    }
-
-    // ✅ LENGTH LOGIC
+    // ✅ length rules
     const isShort = text.length < 50;
     const isLong = text.length > 120;
 
     const lengthInstruction = isShort
-      ? "Replies must be under 15 words."
+      ? "Replies must be under 12 words."
       : isLong
-      ? "Replies should be 2-3 sentences."
+      ? "Replies should be 2-3 short sentences."
       : "Replies should be 1-2 sentences.";
 
     const toneMap: Record<string, string> = {
-      confident: "confident and high-value",
-      funny: "witty and playful",
-      savage: "bold and slightly aggressive",
+      confident: "confident and composed",
+      funny: "playful and witty",
+      savage: "bold and slightly confrontational",
       chill: "casual and relaxed",
-      sarcastic: "sarcastic and dry",
-      romantic: "affectionate and flirty",
-      supportive: "empathetic and encouraging",
+      sarcastic: "dry and sarcastic",
+      romantic: "warm and flirty",
+      supportive: "empathetic and caring",
       dry: "short and blunt",
       energetic: "excited and expressive",
-      mysterious: "intriguing and vague",
-      apologetic: "sincere and remorseful",
+      mysterious: "intriguing and slightly vague",
+      apologetic: "sincere and accountable",
       flirty: "playful and teasing",
     };
 
-    // ✅ FIXED REGEX (no 's' flag)
+    // ✅ extract last message if convo
     const matches = text.match(/Other:\s*([\s\S]*?)(?=\n(?:User:|Other:)|\n*$)/g);
 
     let conversationContext = text;
@@ -125,55 +142,81 @@ export async function POST(req: Request) {
         .replace(/^Other:\s*/, '')
         .trim();
 
-      conversationContext = `Conversation:\n${text}\n\nReply to this message: "${last}"`;
+      conversationContext = `Conversation:\n${text}\n\nReply to:\n"${last}"`;
     }
 
-    const systemMessage = `You are SubText AI.
+    // 🔥 NEW POWERFUL PROMPT
+    const systemMessage = `
+You are SubText AI — an expert in texting, attraction, and emotional intelligence.
 
-Generate 5 high-quality text replies in a ${toneMap[effectiveTone]} tone.
+Your replies must:
+- sound human (not AI)
+- be natural and conversational
+- avoid being needy or over-explaining
+- feel like something someone would actually send
+
+RULES:
+- no robotic phrasing
+- no long paragraphs unless necessary
+- short, punchy, realistic messages
+- each reply must feel different
+
+STYLE:
+- use casual texting tone
+- subtle emotion > obvious emotion
+
+DIVERSITY:
+- include variety:
+  • one confident
+  • one playful
+  • one curious
+  • one calm
+  • one bold
+
 ${lengthInstruction}
 
 Return STRICT JSON:
 {
   "replies": [
-    { "text": "...", "tone": "...", "explanation": "..." }
+    { "text": "...", "tone": "..." }
   ]
 }
+`;
 
-NO markdown. ONLY JSON.`;
+    const userPrompt = `
+${conversationContext}
 
-    const userPrompt = `${conversationContext}\nTone: ${effectiveTone}`;
+Target tone: ${toneMap[effectiveTone]}
+`;
 
-    // ✅ TIMEOUT
+    // ✅ API call
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
 
     let aiText = '';
 
     try {
-      const response = await fetch(DEEPSEEK_API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model: 'deepseek-chat',
-          messages: [
-            { role: 'system', content: systemMessage },
-            { role: 'user', content: userPrompt },
-          ],
-          temperature: 0.8,
-          response_format: { type: 'json_object' },
-        }),
-        signal: controller.signal,
-      });
+      const response = await fetchWithRetry(() =>
+        fetch(DEEPSEEK_API_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
+          },
+          body: JSON.stringify({
+            model: 'deepseek-chat',
+            messages: [
+              { role: 'system', content: systemMessage },
+              { role: 'user', content: userPrompt },
+            ],
+            temperature: 0.65,
+            response_format: { type: 'json_object' },
+          }),
+          signal: controller.signal,
+        })
+      );
 
       clearTimeout(timeout);
-
-      if (!response.ok) {
-        throw new Error(`AI API error: ${response.status}`);
-      }
 
       const data = await response.json();
       aiText = data?.choices?.[0]?.message?.content || '';
@@ -185,50 +228,41 @@ NO markdown. ONLY JSON.`;
         return NextResponse.json({ error: 'AI timeout' }, { status: 504 });
       }
 
-      console.error('AI ERROR:', err);
-      return NextResponse.json({ error: 'AI request failed' }, { status: 500 });
+      return NextResponse.json({ error: 'AI failed' }, { status: 500 });
     }
 
-    // ✅ SAFE PARSE
+    // ✅ parse safely
     let parsed: ReplyResult;
 
-    try {
-      const raw = JSON.parse(aiText) as any;
+    const raw = extractJSON(aiText);
 
+    if (raw && Array.isArray(raw.replies)) {
       parsed = {
-        replies: Array.isArray(raw.replies)
-          ? raw.replies.slice(0, 5).map((r: any) => ({
-              text: String(r.text || '').trim(),
-              tone: String(r.tone || effectiveTone),
-              explanation: r.explanation
-                ? String(r.explanation)
-                : undefined,
-            }))
-          : [],
+        replies: raw.replies.slice(0, 5).map((r: any) => ({
+          text: String(r.text || '').trim(),
+          tone: String(r.tone || effectiveTone),
+        })),
       };
-
-      if (parsed.replies.length === 0) throw new Error();
-
-    } catch {
+    } else {
       parsed = {
         replies: [
           {
-            text: aiText.slice(0, 120),
+            text: "not sure what to say here…",
             tone: effectiveTone,
           },
         ],
       };
     }
 
-    // ✅ SAFE CREDIT DEDUCTION
-    try {
-      await supabase.rpc('deduct_credits', {
-        p_user_id: userId,
-        p_amount: 1,
-        p_type: 'reply',
-      });
-    } catch (err) {
-      console.error('Credit deduction failed:', err);
+    // ✅ deduct credits only if valid
+    if (parsed.replies.length > 0) {
+      try {
+        await supabase.rpc('deduct_credits', {
+          p_user_id: userId,
+          p_amount: 1,
+          p_type: 'reply',
+        });
+      } catch {}
     }
 
     return NextResponse.json({
@@ -238,8 +272,6 @@ NO markdown. ONLY JSON.`;
     });
 
   } catch (err: any) {
-    console.error('ROUTE ERROR:', err);
-
     return NextResponse.json(
       { error: err?.message || 'Server error' },
       { status: 500 }
