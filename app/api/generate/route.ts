@@ -11,97 +11,109 @@ interface DecodeResult {
   suggestedVibe: string;
 }
 
+// ✅ safer JSON extraction (handles messy AI output)
+function extractJSON(text: string) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        return JSON.parse(match[0]);
+      } catch {}
+    }
+  }
+  return null;
+}
+
+// ✅ retry wrapper (VERY IMPORTANT for reliability)
+async function fetchWithRetry(fetchFn: () => Promise<Response>, retries = 2) {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const res = await fetchFn();
+      if (res.ok) return res;
+    } catch {}
+    await new Promise(r => setTimeout(r, 500));
+  }
+  throw new Error('Failed after retries');
+}
+
 export async function POST(req: Request) {
   try {
-    // ✅ ENV SAFETY
     if (!DEEPSEEK_API_KEY) {
-      return NextResponse.json(
-        { error: 'Missing DEEPSEEK_API_KEY' },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: 'Missing API key' }, { status: 500 });
     }
 
-    const body = await req.json();
-    let { userId, text, context } = body;
+    const { userId, text, context } = await req.json();
 
-    // ✅ VALIDATION
     if (!userId || !text) {
-      return NextResponse.json(
-        { error: 'Missing required fields' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Missing fields' }, { status: 400 });
     }
 
-    // ✅ USER CHECK
-    const { data: userExists, error: userError } = await supabase
+    // ✅ Check user
+    const { data: user } = await supabase
       .from('profiles')
       .select('id')
       .eq('id', userId)
       .single();
 
-    if (userError || !userExists) {
+    if (!user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    // ✅ MESSAGE LENGTH LOGIC
-    const isShort = text.length < 40;
-    const isLong = text.length > 100;
+    // ✅ smarter instruction
+    const systemMessage = `
+You are SubText AI, an expert in human communication and emotional intelligence.
 
-    const analysisInstruction = isShort
-      ? "Short message → focus on vibe + emotional signal."
-      : isLong
-      ? "Long message → analyze deeply (intent, tone, subtext)."
-      : "Standard message → analyze tone and meaning.";
+Analyze the message deeply and return ONLY JSON.
 
-    const systemMessage = `You are SubText AI, an expert in text psychology.
+Rules:
+- Be concise but insightful
+- Focus on emotional intent
+- Avoid generic responses
 
-${analysisInstruction}
-
-Return STRICT JSON ONLY:
+Format:
 {
-  "analysis": string,
-  "tone": string,
-  "hiddenMeaning": string,
-  "suggestedVibe": string
+  "analysis": "clear explanation",
+  "tone": "one word or short phrase",
+  "hiddenMeaning": "what they really mean",
+  "suggestedVibe": "how the user should respond"
 }
+`;
 
-NO markdown. ONLY JSON.`;
-
-    let userPrompt = `Message:\n${text}`;
-    if (context && context.trim()) {
-      userPrompt += `\n\nContext: ${context}`;
+    let prompt = `Message:\n${text}`;
+    if (context?.trim()) {
+      prompt += `\n\nContext:\n${context}`;
     }
 
-    // ✅ TIMEOUT CONTROL
+    // ✅ API CALL WITH RETRY
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
 
     let aiText = '';
 
     try {
-      const response = await fetch(DEEPSEEK_API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model: 'deepseek-chat',
-          messages: [
-            { role: 'system', content: systemMessage },
-            { role: 'user', content: userPrompt },
-          ],
-          temperature: 0.7,
-          response_format: { type: 'json_object' },
-        }),
-        signal: controller.signal,
-      });
+      const response = await fetchWithRetry(() =>
+        fetch(DEEPSEEK_API_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
+          },
+          body: JSON.stringify({
+            model: 'deepseek-chat',
+            messages: [
+              { role: 'system', content: systemMessage },
+              { role: 'user', content: prompt },
+            ],
+            temperature: 0.6, // slightly lower = more consistent
+            response_format: { type: 'json_object' },
+          }),
+          signal: controller.signal,
+        })
+      );
 
       clearTimeout(timeout);
-
-      if (!response.ok) {
-        throw new Error(`AI API error: ${response.status}`);
-      }
 
       const data = await response.json();
       aiText = data?.choices?.[0]?.message?.content || '';
@@ -110,53 +122,42 @@ NO markdown. ONLY JSON.`;
 
     } catch (err: any) {
       if (err.name === 'AbortError') {
-        return NextResponse.json(
-          { error: 'AI timeout' },
-          { status: 504 }
-        );
+        return NextResponse.json({ error: 'AI timeout' }, { status: 504 });
       }
 
-      console.error('AI ERROR:', err);
-
-      return NextResponse.json(
-        { error: 'AI request failed' },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: 'AI failed' }, { status: 500 });
     }
 
-    // ✅ SAFE JSON PARSE
+    // ✅ SAFE PARSE (IMPROVED)
     let parsed: DecodeResult;
 
-    try {
-      const raw = JSON.parse(aiText) as any;
+    const raw = extractJSON(aiText);
 
+    if (raw && raw.analysis) {
       parsed = {
-        analysis: String(raw.analysis || '').trim(),
+        analysis: String(raw.analysis).trim(),
         tone: String(raw.tone || 'unknown').trim(),
         hiddenMeaning: String(raw.hiddenMeaning || '').trim(),
         suggestedVibe: String(raw.suggestedVibe || 'neutral').trim(),
       };
-
-      if (!parsed.analysis) throw new Error();
-
-    } catch {
+    } else {
       parsed = {
-        analysis: "Couldn't fully analyze this message. Try again.",
+        analysis: "Couldn't analyze this message clearly.",
         tone: "unknown",
-        hiddenMeaning: "Unclear meaning",
+        hiddenMeaning: "unclear",
         suggestedVibe: "neutral",
       };
     }
 
-    // ✅ SAFE CREDIT DEDUCTION
-    try {
-      await supabase.rpc('deduct_credits', {
-        p_user_id: userId,
-        p_amount: 1,
-        p_type: 'decode',
-      });
-    } catch (err) {
-      console.error('Credit deduction failed:', err);
+    // ✅ ONLY deduct credits if success
+    if (parsed.analysis && parsed.analysis !== "Couldn't analyze this message clearly.") {
+      try {
+        await supabase.rpc('deduct_credits', {
+          p_user_id: userId,
+          p_amount: 1,
+          p_type: 'decode',
+        });
+      } catch {}
     }
 
     return NextResponse.json({
@@ -166,8 +167,6 @@ NO markdown. ONLY JSON.`;
     });
 
   } catch (err: any) {
-    console.error('ROUTE ERROR:', err);
-
     return NextResponse.json(
       { error: err?.message || 'Server error' },
       { status: 500 }
