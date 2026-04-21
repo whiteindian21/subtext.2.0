@@ -51,12 +51,14 @@ const TONE_OPTIONS = [
   { label: 'Flirty', emoji: '😉', category: 'flirty', vibeMatch: ['romantic', 'playful'] },
 ];
 
+// ✅ FIXED: returns lowercase category (what backend expects)
 const getBestToneForVibe = (suggestedVibe: string): string => {
-  const vibeLower = suggestedVibe.toLowerCase();
+  const vibeLower = suggestedVibe.toLowerCase().trim();
   const match = TONE_OPTIONS.find(tone => 
     tone.vibeMatch.some(match => vibeLower.includes(match) || match === vibeLower)
   );
-  return match?.label || 'Chill';
+  // Return category (lowercase) with fallback to 'chill'
+  return match?.category || 'chill';
 };
 
 const getReplyTag = (reply: ReplyItem, index: number): 'Best' | 'Safe' | 'Bold' => {
@@ -265,7 +267,10 @@ export default function Dashboard() {
     setLoadingReplies(true);
     setActiveTab('reply');
     try {
-      const bestTone = getBestToneForVibe(lastDecodeResult.suggestedVibe);
+      // ✅ getBestToneForVibe now returns lowercase category (e.g., "confident", "dry")
+      let bestTone = getBestToneForVibe(lastDecodeResult.suggestedVibe);
+      // ✅ Extra safeguard: lowercase and trim (defensive programming)
+      bestTone = bestTone.toLowerCase().trim();
       
       const enhancedContext = [
         context,
@@ -281,7 +286,7 @@ export default function Dashboard() {
           userId: user?.id,
           text: input,
           context: enhancedContext,
-          tone: bestTone
+          tone: bestTone   // ✅ Now sends correct value like "confident", "dry", "chill"
         })
       });
       
