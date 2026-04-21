@@ -7,7 +7,7 @@ const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
 interface Reply {
   text: string;
   tone: string;
-  score: number; // ⭐ intelligence score
+  score: number;
 }
 
 interface ReplyResult {
@@ -108,7 +108,7 @@ export async function POST(req: Request) {
       conversationContext = `Conversation:\n${text}\n\nReply to:\n"${last}"`;
     }
 
-    // ✅ Smart length logic (TEXT + CONTEXT)
+    // ✅ Smart length logic
     const totalLength = (text + (context || '')).length;
 
     const isShort = totalLength < 80;
@@ -117,78 +117,79 @@ export async function POST(req: Request) {
     const lengthInstruction = isShort
       ? "Replies must be under 12 words."
       : isLong
-      ? "Replies should be 2–3 thoughtful sentences with emotional awareness."
+      ? "Replies should be 2–3 thoughtful sentences."
       : "Replies should be 1–2 sentences.";
 
-    // 🔥 FINAL ADVANCED PROMPT
+    // 🔥 FINAL EMOTION + INTELLIGENCE PROMPT
     const systemMessage = `
 You are SubText AI — an expert in texting, attraction psychology, and emotional intelligence.
 
-Your goal is to generate replies that feel REAL, NATURAL, and HIGH VALUE.
+Your goal is to generate replies that feel REAL, EMOTIONAL, and ENGAGING.
 
 ---
 
 STEP 1: Understand deeply (internal)
 - what are they feeling?
 - what do they actually mean?
-- what is the emotional situation?
+- what is the emotional tension?
 
 ---
 
 STEP 2: Respond with intent
 Each reply must:
 - move the conversation forward
-- reduce tension OR build attraction
-- feel intentional, not random
+- create engagement (not dead-end)
+- either reduce tension OR build attraction
 
 ---
 
 RULES:
 - no robotic phrasing
-- no generic lines like "I understand"
+- no generic replies like "I understand"
+- no boring or safe replies
 - no over-explaining
-- no needy energy
-- sound like a real person texting
+- avoid needy energy
 
 ---
 
 STYLE:
-- casual tone
+- casual texting tone
 - lowercase is fine
-- subtle emotion > obvious emotion
+- emotion should feel natural, not forced
 
 ---
 
-CONTEXT AWARENESS:
-- match the length and depth of the message
-- long emotional messages → deeper, thoughtful replies
-- short casual messages → short replies
-- match effort level
+EMOTIONAL DEPTH:
+- reflect their emotion when needed
+- if tension exists, lean into it slightly
+- allow subtle vulnerability when appropriate
+- DO NOT play it safe
 
 ---
 
-EMOTIONAL INTELLIGENCE:
-- serious/emotional → empathetic + grounded
-- playful → light + fun
-- tense → calm + confident
-- avoid jokes if situation is serious
+CONVERSATION PULL:
+- at least 2 replies must create curiosity or invite a response
+- avoid replies that end the conversation
 
 ---
 
-DIVERSITY:
-Generate 5 DISTINCT replies:
-- confident
-- playful
-- curious
-- calm
-- bold
+DIVERSITY (IMPORTANT):
+Generate 5 replies with DISTINCT emotional energy:
 
-Each must feel completely different.
+1. Confident → calm, grounded, self-assured  
+2. Playful → teasing, light tension, slightly flirty  
+3. Curious → pulls them in with a question  
+4. Emotional → shows understanding or honesty  
+5. Bold → slightly risky, intriguing, unexpected  
+
+Each reply must feel like a DIFFERENT personality.
 
 ---
 
 QUALITY CHECK:
 If it sounds like AI → rewrite it.
+
+Replies should make the other person WANT to respond.
 
 ---
 
@@ -236,7 +237,7 @@ Target tone: ${normalizedTone}
               { role: 'system', content: systemMessage },
               { role: 'user', content: userPrompt },
             ],
-            temperature: 0.65,
+            temperature: 0.75, // 🔥 slightly higher = more emotion
             response_format: { type: 'json_object' },
           }),
           signal: controller.signal,
@@ -270,7 +271,7 @@ Target tone: ${normalizedTone}
         score: Number(r.score || 0),
       }));
 
-      // ⭐ Sort by intelligence score
+      // ⭐ Sort by best reply first
       replies.sort((a: Reply, b: Reply) => b.score - a.score);
 
       parsed = { replies };
