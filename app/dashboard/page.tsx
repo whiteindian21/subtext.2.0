@@ -8,7 +8,7 @@ import { User } from '@supabase/supabase-js';
 import { 
   Sparkles, LogOut, Copy, Loader2, Zap, MessageSquare, Brain,
   X, Settings, CheckCircle, Info, ChevronRight, Upload, Trash2,
-  Shield, Smile, Eye, Target, Star, Heart, Flame, Send
+  Shield, Smile, Eye, Target, Star, Heart, Flame, Send, Share2
 } from 'lucide-react';
 
 // Types
@@ -51,13 +51,11 @@ const TONE_OPTIONS = [
   { label: 'Flirty', emoji: '😉', category: 'flirty', vibeMatch: ['romantic', 'playful'] },
 ];
 
-// ✅ FIXED: returns lowercase category (what backend expects)
 const getBestToneForVibe = (suggestedVibe: string): string => {
   const vibeLower = suggestedVibe.toLowerCase().trim();
   const match = TONE_OPTIONS.find(tone => 
     tone.vibeMatch.some(match => vibeLower.includes(match) || match === vibeLower)
   );
-  // Return category (lowercase) with fallback to 'chill'
   return match?.category || 'chill';
 };
 
@@ -81,7 +79,6 @@ const tagIcons = {
   Bold: <Flame className="w-3 h-3" />
 };
 
-// Rotating placeholders
 const ROTATING_PLACEHOLDERS = [
   "Paste their message here... \"I'm busy rn, talk later\"",
   "Try: \"I can't believe you did that 😤\"",
@@ -89,6 +86,203 @@ const ROTATING_PLACEHOLDERS = [
   "\"Are we still on for tonight?\"",
   "\"I need some space right now...\""
 ];
+
+// ─── GO VIRAL: generates a share card and triggers download ───────────────────
+async function downloadShareCard(originalText: string, hiddenMeaning: string) {
+  // Dynamically import html2canvas only when needed
+  // If you don't have html2canvas, install it: npm install html2canvas
+  // Alternatively, this uses a canvas-only approach with no dependencies.
+
+  const CARD_W = 1080;
+  const CARD_H = 1080;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = CARD_W;
+  canvas.height = CARD_H;
+  const ctx = canvas.getContext('2d')!;
+
+  // Background gradient
+  const bg = ctx.createLinearGradient(0, 0, CARD_W, CARD_H);
+  bg.addColorStop(0, '#0f0a1e');
+  bg.addColorStop(0.5, '#130d2e');
+  bg.addColorStop(1, '#0a0a18');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, CARD_W, CARD_H);
+
+  // Subtle grid pattern
+  ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+  ctx.lineWidth = 1;
+  for (let x = 0; x < CARD_W; x += 40) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, CARD_H); ctx.stroke();
+  }
+  for (let y = 0; y < CARD_H; y += 40) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(CARD_W, y); ctx.stroke();
+  }
+
+  // Glow orb top-left
+  const orb1 = ctx.createRadialGradient(200, 200, 0, 200, 200, 400);
+  orb1.addColorStop(0, 'rgba(139,92,246,0.25)');
+  orb1.addColorStop(1, 'rgba(139,92,246,0)');
+  ctx.fillStyle = orb1;
+  ctx.fillRect(0, 0, CARD_W, CARD_H);
+
+  // Glow orb bottom-right
+  const orb2 = ctx.createRadialGradient(900, 900, 0, 900, 900, 350);
+  orb2.addColorStop(0, 'rgba(236,72,153,0.2)');
+  orb2.addColorStop(1, 'rgba(236,72,153,0)');
+  ctx.fillStyle = orb2;
+  ctx.fillRect(0, 0, CARD_W, CARD_H);
+
+  // Helper: wrap text
+  function wrapText(text: string, maxWidth: number, font: string): string[] {
+    ctx.font = font;
+    const words = text.split(' ');
+    const lines: string[] = [];
+    let current = '';
+    for (const word of words) {
+      const test = current ? `${current} ${word}` : word;
+      if (ctx.measureText(test).width > maxWidth) {
+        if (current) lines.push(current);
+        current = word;
+      } else {
+        current = test;
+      }
+    }
+    if (current) lines.push(current);
+    return lines;
+  }
+
+  // ── "THEY SAID" label ──
+  ctx.font = 'bold 28px monospace';
+  ctx.fillStyle = 'rgba(161,161,170,0.7)';
+  ctx.letterSpacing = '4px';
+  ctx.fillText('THEY SAID', 80, 120);
+
+  // Decorative line under label
+  ctx.strokeStyle = 'rgba(139,92,246,0.4)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(80, 135); ctx.lineTo(280, 135); ctx.stroke();
+
+  // ── Original message bubble ──
+  const bubbleX = 80;
+  const bubbleY = 160;
+  const bubbleW = CARD_W - 160;
+  const msgFont = '500 44px Georgia, serif';
+  const msgLines = wrapText(`"${originalText}"`, bubbleW - 60, msgFont);
+  const bubbleH = msgLines.length * 60 + 60;
+
+  // Bubble background
+  ctx.fillStyle = 'rgba(255,255,255,0.05)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+  ctx.lineWidth = 1;
+  const r = 20;
+  ctx.beginPath();
+  ctx.moveTo(bubbleX + r, bubbleY);
+  ctx.lineTo(bubbleX + bubbleW - r, bubbleY);
+  ctx.quadraticCurveTo(bubbleX + bubbleW, bubbleY, bubbleX + bubbleW, bubbleY + r);
+  ctx.lineTo(bubbleX + bubbleW, bubbleY + bubbleH - r);
+  ctx.quadraticCurveTo(bubbleX + bubbleW, bubbleY + bubbleH, bubbleX + bubbleW - r, bubbleY + bubbleH);
+  ctx.lineTo(bubbleX + r, bubbleY + bubbleH);
+  ctx.quadraticCurveTo(bubbleX, bubbleY + bubbleH, bubbleX, bubbleY + bubbleH - r);
+  ctx.lineTo(bubbleX, bubbleY + r);
+  ctx.quadraticCurveTo(bubbleX, bubbleY, bubbleX + r, bubbleY);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Message text
+  ctx.font = msgFont;
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  msgLines.forEach((line, i) => {
+    ctx.fillText(line, bubbleX + 30, bubbleY + 50 + i * 60);
+  });
+
+  // ── Divider with "BUT WHAT THEY REALLY MEAN IS" ──
+  const dividerY = bubbleY + bubbleH + 70;
+  ctx.strokeStyle = 'rgba(139,92,246,0.3)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([6, 4]);
+  ctx.beginPath(); ctx.moveTo(80, dividerY); ctx.lineTo(CARD_W - 80, dividerY); ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.font = 'bold 24px monospace';
+  ctx.fillStyle = 'rgba(167,139,250,0.8)';
+  const labelText = '✦  WHAT THEY REALLY MEAN  ✦';
+  const labelW = ctx.measureText(labelText).width;
+  ctx.fillText(labelText, (CARD_W - labelW) / 2, dividerY + 45);
+
+  // ── Hidden meaning card ──
+  const hmCardX = 80;
+  const hmCardY = dividerY + 75;
+  const hmCardW = CARD_W - 160;
+  const hmFont = 'bold 52px Georgia, serif';
+  const hmLines = wrapText(hiddenMeaning, hmCardW - 80, hmFont);
+  const hmCardH = hmLines.length * 72 + 60;
+
+  // Card gradient background
+  const cardGrad = ctx.createLinearGradient(hmCardX, hmCardY, hmCardX + hmCardW, hmCardY + hmCardH);
+  cardGrad.addColorStop(0, 'rgba(139,92,246,0.2)');
+  cardGrad.addColorStop(1, 'rgba(236,72,153,0.15)');
+  ctx.fillStyle = cardGrad;
+  ctx.strokeStyle = 'rgba(139,92,246,0.5)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(hmCardX + r, hmCardY);
+  ctx.lineTo(hmCardX + hmCardW - r, hmCardY);
+  ctx.quadraticCurveTo(hmCardX + hmCardW, hmCardY, hmCardX + hmCardW, hmCardY + r);
+  ctx.lineTo(hmCardX + hmCardW, hmCardY + hmCardH - r);
+  ctx.quadraticCurveTo(hmCardX + hmCardW, hmCardY + hmCardH, hmCardX + hmCardW - r, hmCardY + hmCardH);
+  ctx.lineTo(hmCardX + r, hmCardY + hmCardH);
+  ctx.quadraticCurveTo(hmCardX, hmCardY + hmCardH, hmCardX, hmCardY + hmCardH - r);
+  ctx.lineTo(hmCardX, hmCardY + r);
+  ctx.quadraticCurveTo(hmCardX, hmCardY, hmCardX + r, hmCardY);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Hidden meaning text
+  ctx.font = hmFont;
+  ctx.fillStyle = '#ffffff';
+  hmLines.forEach((line, i) => {
+    ctx.fillText(line, hmCardX + 40, hmCardY + 58 + i * 72);
+  });
+
+  // ── Bottom branding bar ──
+  const barY = CARD_H - 110;
+  const barGrad = ctx.createLinearGradient(0, barY, CARD_W, barY + 110);
+  barGrad.addColorStop(0, 'rgba(139,92,246,0.15)');
+  barGrad.addColorStop(1, 'rgba(236,72,153,0.1)');
+  ctx.fillStyle = barGrad;
+  ctx.fillRect(0, barY, CARD_W, 110);
+
+  ctx.strokeStyle = 'rgba(139,92,246,0.3)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, barY); ctx.lineTo(CARD_W, barY); ctx.stroke();
+
+  // Brand name
+  ctx.font = 'bold 36px monospace';
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.fillText('SubText AI', 80, barY + 65);
+
+  // Tagline
+  ctx.font = '24px monospace';
+  ctx.fillStyle = 'rgba(167,139,250,0.7)';
+  ctx.fillText('trysubtext.online', 80, barY + 95);
+
+  // ✦ badge right side
+  ctx.font = 'bold 28px monospace';
+  ctx.fillStyle = 'rgba(236,72,153,0.8)';
+  const badge = '✦ decode what\'s unsaid';
+  const badgeW = ctx.measureText(badge).width;
+  ctx.fillText(badge, CARD_W - badgeW - 80, barY + 65);
+
+  // Download
+  const link = document.createElement('a');
+  link.download = 'subtext-decoded.png';
+  link.href = canvas.toDataURL('image/png');
+  link.click();
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
   const router = useRouter();
@@ -104,6 +298,7 @@ export default function Dashboard() {
   const [toast, setToast] = useState<{ message: string; type: ToastType } | null>(null);
   const [placeholderIndex, setPlaceholderIndex] = useState(0);
   const [isFocused, setIsFocused] = useState(false);
+  const [isGeneratingCard, setIsGeneratingCard] = useState(false); // ← NEW
   
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -112,7 +307,6 @@ export default function Dashboard() {
   const [lastDecodeResult, setLastDecodeResult] = useState<DecodeResult | null>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
 
-  // Rotating placeholder effect
   useEffect(() => {
     const interval = setInterval(() => {
       setPlaceholderIndex((prev) => (prev + 1) % ROTATING_PLACEHOLDERS.length);
@@ -120,7 +314,6 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, []);
 
-  // Auth & Credits
   useEffect(() => {
     const checkUser = async () => {
       const { data: { session } } = await supabase.auth.getSession();
@@ -159,27 +352,16 @@ export default function Dashboard() {
     try {
       const formData = new FormData();
       formData.append('image', file);
-      
-      const res = await fetch('/api/ocr-vision', {
-        method: 'POST',
-        body: formData,
-      });
-      
+      const res = await fetch('/api/ocr-vision', { method: 'POST', body: formData });
       const data = await res.json();
-      
-      if (data.error) {
-        showToast(data.error, 'error');
-        return;
-      }
-      
+      if (data.error) { showToast(data.error, 'error'); return; }
       const messages = data.messages;
       if (messages && Array.isArray(messages) && messages.length > 0) {
         const formattedLines = messages.map((msg: { role: string; text: string }) => {
           const speaker = msg.role === 'user' ? 'You' : 'Them';
           return `${speaker}: ${msg.text}`;
         });
-        const formattedConversation = formattedLines.join('\n\n');
-        setInput(formattedConversation);
+        setInput(formattedLines.join('\n\n'));
         showToast('Conversation extracted with speaker labels!', 'success');
       } else {
         showToast('Could not parse conversation. Try a clearer screenshot.', 'error');
@@ -195,13 +377,9 @@ export default function Dashboard() {
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 5 * 1024 * 1024) {
-      showToast('Image too large (max 5MB)', 'error');
-      return;
-    }
+    if (file.size > 5 * 1024 * 1024) { showToast('Image too large (max 5MB)', 'error'); return; }
     setSelectedImage(file);
-    const previewUrl = URL.createObjectURL(file);
-    setImagePreview(previewUrl);
+    setImagePreview(URL.createObjectURL(file));
     performVisionOCR(file);
   };
 
@@ -212,28 +390,16 @@ export default function Dashboard() {
   };
 
   const handleDecode = async () => {
-    if (!input.trim()) {
-      showToast('Please paste a message or upload a screenshot', 'error');
-      return;
-    }
-    if (credits <= 0) {
-      showToast('Out of credits! Please upgrade.', 'error');
-      return;
-    }
-
+    if (!input.trim()) { showToast('Please paste a message or upload a screenshot', 'error'); return; }
+    if (credits <= 0) { showToast('Out of credits! Please upgrade.', 'error'); return; }
     setLoading(true);
     setActiveTab('decode');
     try {
       const res = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: user?.id,
-          text: input,
-          context: context.trim() || undefined
-        })
+        body: JSON.stringify({ userId: user?.id, text: input, context: context.trim() || undefined })
       });
-      
       const data = await res.json();
       if (data.error) {
         showToast(data.error, 'error');
@@ -241,10 +407,7 @@ export default function Dashboard() {
         setOutput({ data: data.result, type: 'decode' });
         setCredits(prev => prev - 1);
         setLastDecodeResult(data.result as DecodeResult);
-        
-        setTimeout(() => {
-          resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }, 100);
+        setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
       }
     } catch (err) {
       console.error(err);
@@ -255,50 +418,31 @@ export default function Dashboard() {
   };
 
   const generateRepliesFromDecode = async () => {
-    if (!lastDecodeResult) {
-      showToast('Please decode the message first', 'error');
-      return;
-    }
-    if (credits <= 0) {
-      showToast('Out of credits! Please upgrade.', 'error');
-      return;
-    }
-
+    if (!lastDecodeResult) { showToast('Please decode the message first', 'error'); return; }
+    if (credits <= 0) { showToast('Out of credits! Please upgrade.', 'error'); return; }
     setLoadingReplies(true);
     setActiveTab('reply');
     try {
-      // ✅ getBestToneForVibe now returns lowercase category (e.g., "confident", "dry")
       let bestTone = getBestToneForVibe(lastDecodeResult.suggestedVibe);
-      // ✅ Extra safeguard: lowercase and trim (defensive programming)
       bestTone = bestTone.toLowerCase().trim();
-      
       const enhancedContext = [
         context,
         `[Decoded Analysis] ${lastDecodeResult.analysis}`,
         `[Hidden Meaning] ${lastDecodeResult.hiddenMeaning}`,
         `[Suggested Vibe] ${lastDecodeResult.suggestedVibe}`
       ].filter(Boolean).join('\n');
-
       const res = await fetch('/api/generate-reply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: user?.id,
-          text: input,
-          context: enhancedContext,
-          tone: bestTone   // ✅ Now sends correct value like "confident", "dry", "chill"
-        })
+        body: JSON.stringify({ userId: user?.id, text: input, context: enhancedContext, tone: bestTone })
       });
-      
       const data = await res.json();
       if (data.error) {
         showToast(data.error, 'error');
       } else {
         setOutput({ data: data.result, type: 'reply' });
         setCredits(prev => prev - 1);
-        setTimeout(() => {
-          resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }, 100);
+        setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
       }
     } catch (err) {
       console.error(err);
@@ -307,6 +451,23 @@ export default function Dashboard() {
       setLoadingReplies(false);
     }
   };
+
+  // ── GO VIRAL handler ──────────────────────────────────────────────────────
+  const handleGoViral = async () => {
+    if (!output || output.type !== 'decode') return;
+    const decoded = output.data as DecodeResult;
+    setIsGeneratingCard(true);
+    try {
+      await downloadShareCard(input, decoded.hiddenMeaning);
+      showToast('Share card downloaded! Post it anywhere 🔥', 'success');
+    } catch (err) {
+      console.error('Share card error:', err);
+      showToast('Could not generate card. Try again.', 'error');
+    } finally {
+      setIsGeneratingCard(false);
+    }
+  };
+  // ─────────────────────────────────────────────────────────────────────────
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -325,12 +486,8 @@ export default function Dashboard() {
 
   const userName = user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'User';
 
-  // Prepare replies with tags
   const repliesWithTags: ReplyWithTag[] = output?.type === 'reply' && output.data
-    ? (output.data as ReplyResult).replies.map((reply, idx) => ({
-        ...reply,
-        tag: getReplyTag(reply, idx)
-      }))
+    ? (output.data as ReplyResult).replies.map((reply, idx) => ({ ...reply, tag: getReplyTag(reply, idx) }))
     : [];
 
   return (
@@ -345,8 +502,17 @@ export default function Dashboard() {
           70% { box-shadow: 0 0 0 6px rgba(168, 85, 247, 0); }
           100% { box-shadow: 0 0 0 0 rgba(168, 85, 247, 0); }
         }
+        @keyframes shimmer {
+          0% { background-position: -200% center; }
+          100% { background-position: 200% center; }
+        }
         .animate-fadeInUp { animation: fadeInUp 0.5s ease-out forwards; }
         .animate-glow-pulse { animation: glowPulse 1.5s infinite; }
+        .shimmer-btn {
+          background: linear-gradient(90deg, #7c3aed, #ec4899, #f97316, #ec4899, #7c3aed);
+          background-size: 200% auto;
+          animation: shimmer 3s linear infinite;
+        }
       `}</style>
       
       {/* Ambient background */}
@@ -397,7 +563,7 @@ export default function Dashboard() {
           </p>
         </div>
 
-        {/* Input Card - Chat Composer Style */}
+        {/* Input Card */}
         <div className={`bg-zinc-900/40 border rounded-3xl p-6 md:p-8 mb-12 backdrop-blur-xl shadow-2xl shadow-black/20 transition-all duration-300 ${isFocused ? 'border-purple-500/40 shadow-purple-500/10' : 'border-white/10'}`}>
           <textarea
             className="w-full bg-transparent text-xl md:text-2xl placeholder-zinc-600 focus:outline-none resize-none min-h-[120px] leading-relaxed font-medium transition-all"
@@ -419,7 +585,6 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Screenshot Upload */}
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 rounded-full bg-purple-500/10 border border-purple-500/30 text-purple-300 text-sm font-medium hover:bg-purple-500/20 transition-colors">
               <Upload size={16} />
@@ -442,21 +607,19 @@ export default function Dashboard() {
             )}
           </div>
           
-          {/* Context Input */}
           <div className="group mt-6">
             <label className="flex items-center gap-2 text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 group-focus-within:text-purple-400 transition-colors">
               <Info size={12} /> Context or Question (optional)
             </label>
             <textarea
               className="w-full bg-black/20 border border-white/5 rounded-xl p-4 text-sm placeholder-zinc-600 focus:outline-none focus:border-purple-500/30 focus:bg-black/40 transition resize-none"
-              placeholder="Add context or ask a question about the conversation, e.g., 'Am I overreacting?', 'What does she really mean?', 'Is this sarcastic?'"
+              placeholder="Add context or ask a question, e.g., 'Am I overreacting?', 'What does she really mean?'"
               value={context}
               onChange={(e) => setContext(e.target.value)}
               rows={2}
             />
           </div>
 
-          {/* Decode Button */}
           <div className="mt-8">
             <button
               onClick={handleDecode}
@@ -489,7 +652,6 @@ export default function Dashboard() {
                   </div>
                   
                   <div className="grid md:grid-cols-2 gap-5">
-                    {/* Analysis Card */}
                     <div className="bg-white/5 rounded-2xl p-5 border border-white/5 hover:border-white/10 transition-all">
                       <div className="flex items-center gap-2 mb-3">
                         <MessageSquare size={16} className="text-blue-400" />
@@ -498,7 +660,6 @@ export default function Dashboard() {
                       <p className="text-white text-base leading-relaxed">{(output.data as DecodeResult).analysis}</p>
                     </div>
                     
-                    {/* Tone Card */}
                     <div className="bg-white/5 rounded-2xl p-5 border border-white/5 hover:border-white/10 transition-all">
                       <div className="flex items-center gap-2 mb-3">
                         <Smile size={16} className="text-emerald-400" />
@@ -509,7 +670,6 @@ export default function Dashboard() {
                       </div>
                     </div>
                     
-                    {/* Suggested Vibe Card */}
                     <div className="bg-white/5 rounded-2xl p-5 border border-white/5 hover:border-white/10 transition-all md:col-span-2">
                       <div className="flex items-center gap-2 mb-3">
                         <Target size={16} className="text-amber-400" />
@@ -519,7 +679,7 @@ export default function Dashboard() {
                     </div>
                   </div>
                   
-                  {/* Hidden Meaning - Most Impactful */}
+                  {/* Hidden Meaning */}
                   <div className="mt-6 p-6 bg-gradient-to-br from-purple-900/30 to-indigo-900/20 rounded-2xl border border-purple-500/30 relative overflow-hidden shadow-lg shadow-purple-500/10">
                     <div className="absolute top-0 right-0 p-4 opacity-10 pointer-events-none"><Sparkles size={64} className="text-purple-500" /></div>
                     <div className="flex items-center gap-2 mb-3">
@@ -530,6 +690,38 @@ export default function Dashboard() {
                       {(output.data as DecodeResult).hiddenMeaning}
                     </p>
                   </div>
+
+                  {/* ── GO VIRAL BUTTON ── */}
+                  <div className="mt-6 p-4 bg-black/30 rounded-2xl border border-white/5">
+                    <div className="flex items-start gap-3 mb-3">
+                      <div className="p-1.5 bg-pink-500/10 rounded-lg border border-pink-500/20 mt-0.5">
+                        <Share2 size={14} className="text-pink-400" />
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold uppercase tracking-widest text-zinc-400">Go Viral</p>
+                        <p className="text-xs text-zinc-500 mt-0.5">Download a share card with the decoded text — post it to TikTok, Reels, or Stories</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={handleGoViral}
+                      disabled={isGeneratingCard}
+                      className="shimmer-btn w-full text-white font-bold py-3.5 rounded-xl transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 text-sm tracking-wide shadow-lg shadow-pink-500/20 hover:shadow-pink-500/40 hover:scale-[1.02] active:scale-[0.98]"
+                    >
+                      {isGeneratingCard ? (
+                        <>
+                          <Loader2 size={16} className="animate-spin" />
+                          Generating share card...
+                        </>
+                      ) : (
+                        <>
+                          <Share2 size={16} />
+                          Download Share Card
+                          <span className="text-white/60 font-normal">→ post anywhere</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  {/* ── END GO VIRAL ── */}
                   
                   <div className="h-px w-full bg-gradient-to-r from-transparent via-white/10 to-transparent my-8"></div>
                   
@@ -539,15 +731,9 @@ export default function Dashboard() {
                     className="w-full bg-white/5 border border-white/10 rounded-xl py-4 font-semibold text-white hover:bg-white/10 transition-all flex items-center justify-center gap-2 group"
                   >
                     {loadingReplies ? (
-                      <>
-                        <Loader2 size={20} className="animate-spin" />
-                        Generating replies...
-                      </>
+                      <><Loader2 size={20} className="animate-spin" /> Generating replies...</>
                     ) : (
-                      <>
-                        <Send size={18} className="group-hover:translate-x-1 transition-transform" />
-                        Generate Smart Replies
-                      </>
+                      <><Send size={18} className="group-hover:translate-x-1 transition-transform" /> Generate Smart Replies</>
                     )}
                   </button>
                 </div>
@@ -642,7 +828,6 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Footer Branding */}
         <div className="mt-20 text-center">
           <p className="text-xs text-zinc-600 flex items-center justify-center gap-1">
             <Sparkles size={10} /> Powered by SubText AI — Decode what's unsaid
