@@ -115,95 +115,263 @@ const tagIcons = {
   Bold: <Flame  className="w-3 h-3" />,
 };
 
-// ─── Share Card (canvas, no deps) ────────────────────────────────────────────
-async function downloadShareCard(originalText: string, hiddenMeaning: string) {
-  const W = 1080, H = 1080;
+// ─── Share Card — tone-aware, native share on mobile ─────────────────────────
+interface CardTheme {
+  bg: [string, string, string];
+  orb1: [string, string, number, number];
+  orb2: [string, string, number, number];
+  accent: string;
+  labelColor: string;
+  dividerColor: string;
+  hmBg: [string, string];
+  hmBorder: string;
+  badge: string;
+  emoji: string;
+  vibe: string;
+}
+
+const TONE_THEMES: Record<string, CardTheme> = {
+  savage: {
+    bg: ['#1a0505','#1f0808','#0d0000'],
+    orb1: ['rgba(239,68,68,0.3)','rgba(239,68,68,0)',880,120],
+    orb2: ['rgba(251,146,60,0.2)','rgba(251,146,60,0)',200,900],
+    accent:'#ef4444', labelColor:'rgba(252,165,165,0.85)',
+    dividerColor:'rgba(239,68,68,0.35)',
+    hmBg:['rgba(239,68,68,0.18)','rgba(251,146,60,0.12)'],
+    hmBorder:'rgba(239,68,68,0.5)', badge:'rgba(239,68,68,0.88)',
+    emoji:'🔥', vibe:'SAVAGE',
+  },
+  romantic: {
+    bg: ['#1a0514','#1f0818','#0d0009'],
+    orb1: ['rgba(236,72,153,0.3)','rgba(236,72,153,0)',150,200],
+    orb2: ['rgba(244,114,182,0.2)','rgba(244,114,182,0)',900,850],
+    accent:'#ec4899', labelColor:'rgba(249,168,212,0.88)',
+    dividerColor:'rgba(236,72,153,0.35)',
+    hmBg:['rgba(236,72,153,0.2)','rgba(192,38,211,0.12)'],
+    hmBorder:'rgba(236,72,153,0.55)', badge:'rgba(236,72,153,0.88)',
+    emoji:'💕', vibe:'ROMANTIC',
+  },
+  flirty: {
+    bg: ['#160518','#1a081f','#0d0010'],
+    orb1: ['rgba(192,38,211,0.28)','rgba(192,38,211,0)',180,180],
+    orb2: ['rgba(236,72,153,0.2)','rgba(236,72,153,0)',880,880],
+    accent:'#c026d3', labelColor:'rgba(240,171,252,0.88)',
+    dividerColor:'rgba(192,38,211,0.35)',
+    hmBg:['rgba(192,38,211,0.18)','rgba(236,72,153,0.12)'],
+    hmBorder:'rgba(192,38,211,0.5)', badge:'rgba(192,38,211,0.88)',
+    emoji:'😉', vibe:'FLIRTY',
+  },
+  mysterious: {
+    bg: ['#05060f','#080a18','#020308'],
+    orb1: ['rgba(99,102,241,0.25)','rgba(99,102,241,0)',200,200],
+    orb2: ['rgba(139,92,246,0.18)','rgba(139,92,246,0)',880,880],
+    accent:'#6366f1', labelColor:'rgba(165,180,252,0.88)',
+    dividerColor:'rgba(99,102,241,0.35)',
+    hmBg:['rgba(99,102,241,0.18)','rgba(139,92,246,0.1)'],
+    hmBorder:'rgba(99,102,241,0.5)', badge:'rgba(99,102,241,0.88)',
+    emoji:'🕵️', vibe:'MYSTERIOUS',
+  },
+  playful: {
+    bg: ['#0a1205','#0d1808','#050a02'],
+    orb1: ['rgba(34,197,94,0.25)','rgba(34,197,94,0)',180,180],
+    orb2: ['rgba(250,204,21,0.18)','rgba(250,204,21,0)',900,850],
+    accent:'#22c55e', labelColor:'rgba(134,239,172,0.88)',
+    dividerColor:'rgba(34,197,94,0.3)',
+    hmBg:['rgba(34,197,94,0.16)','rgba(250,204,21,0.1)'],
+    hmBorder:'rgba(34,197,94,0.45)', badge:'rgba(34,197,94,0.88)',
+    emoji:'😂', vibe:'PLAYFUL',
+  },
+  cold: {
+    bg: ['#080c14','#0b1020','#04060e'],
+    orb1: ['rgba(14,165,233,0.22)','rgba(14,165,233,0)',180,180],
+    orb2: ['rgba(99,102,241,0.15)','rgba(99,102,241,0)',900,900],
+    accent:'#0ea5e9', labelColor:'rgba(186,230,253,0.85)',
+    dividerColor:'rgba(14,165,233,0.3)',
+    hmBg:['rgba(14,165,233,0.15)','rgba(99,102,241,0.1)'],
+    hmBorder:'rgba(14,165,233,0.45)', badge:'rgba(14,165,233,0.88)',
+    emoji:'🧊', vibe:'COLD',
+  },
+  default: {
+    bg: ['#0f0a1e','#130d2e','#0a0a18'],
+    orb1: ['rgba(139,92,246,0.25)','rgba(139,92,246,0)',200,200],
+    orb2: ['rgba(236,72,153,0.2)','rgba(236,72,153,0)',900,900],
+    accent:'#8b5cf6', labelColor:'rgba(167,139,250,0.88)',
+    dividerColor:'rgba(139,92,246,0.35)',
+    hmBg:['rgba(139,92,246,0.2)','rgba(236,72,153,0.12)'],
+    hmBorder:'rgba(139,92,246,0.5)', badge:'rgba(139,92,246,0.88)',
+    emoji:'🧠', vibe:'DECODED',
+  },
+};
+
+function getCardTheme(tone: string): CardTheme {
+  const t = tone.toLowerCase();
+  if (t.includes('savage') || t.includes('aggress'))   return TONE_THEMES.savage;
+  if (t.includes('romantic') || t.includes('loving'))  return TONE_THEMES.romantic;
+  if (t.includes('flirt'))                              return TONE_THEMES.flirty;
+  if (t.includes('mysteri') || t.includes('cryptic'))  return TONE_THEMES.mysterious;
+  if (t.includes('playful') || t.includes('funny') || t.includes('humor')) return TONE_THEMES.playful;
+  if (t.includes('distant') || t.includes('cold') || t.includes('dismissi') || t.includes('avoid')) return TONE_THEMES.cold;
+  return TONE_THEMES.default;
+}
+
+function rrect(ctx: CanvasRenderingContext2D, x:number, y:number, w:number, h:number, r:number) {
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+  ctx.lineTo(x+w,y+h-r); ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+  ctx.lineTo(x+r,y+h); ctx.quadraticCurveTo(x,y+h,x,y+h-r);
+  ctx.lineTo(x,y+r); ctx.quadraticCurveTo(x,y,x+r,y); ctx.closePath();
+}
+
+function wrapLines(ctx: CanvasRenderingContext2D, text: string, maxW: number, font: string, max?: number): string[] {
+  ctx.font = font;
+  const words = text.split(' '); const lines: string[] = []; let cur = '';
+  for (const w of words) {
+    const test = cur ? `${cur} ${w}` : w;
+    if (ctx.measureText(test).width > maxW) { if (cur) lines.push(cur); cur = w; }
+    else cur = test;
+  }
+  if (cur) lines.push(cur);
+  if (max && lines.length > max) { lines.splice(max); lines[max-1] = lines[max-1].replace(/\s*\w+$/, '…'); }
+  return lines;
+}
+
+async function downloadShareCard(
+  originalText: string,
+  hiddenMeaning: string,
+  tone: string,
+  suggestedVibe: string
+) {
+  const W = 1080, H = 1350, PAD = 80;
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d')!;
+  const th = getCardTheme(tone);
 
-  const bg = ctx.createLinearGradient(0, 0, W, H);
-  bg.addColorStop(0, '#0f0a1e'); bg.addColorStop(.5, '#130d2e'); bg.addColorStop(1, '#0a0a18');
-  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+  // Background
+  const bgG = ctx.createLinearGradient(0,0,W,H);
+  bgG.addColorStop(0,th.bg[0]); bgG.addColorStop(.5,th.bg[1]); bgG.addColorStop(1,th.bg[2]);
+  ctx.fillStyle = bgG; ctx.fillRect(0,0,W,H);
 
-  ctx.strokeStyle = 'rgba(255,255,255,0.03)'; ctx.lineWidth = 1;
-  for (let x = 0; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
-  for (let y = 0; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+  // Grid
+  ctx.strokeStyle='rgba(255,255,255,0.025)'; ctx.lineWidth=1;
+  for(let x=0;x<W;x+=45){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
+  for(let y=0;y<H;y+=45){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
 
-  const o1 = ctx.createRadialGradient(200,200,0,200,200,400);
-  o1.addColorStop(0,'rgba(139,92,246,0.25)'); o1.addColorStop(1,'rgba(139,92,246,0)');
-  ctx.fillStyle = o1; ctx.fillRect(0,0,W,H);
-  const o2 = ctx.createRadialGradient(900,900,0,900,900,350);
-  o2.addColorStop(0,'rgba(236,72,153,0.2)'); o2.addColorStop(1,'rgba(236,72,153,0)');
-  ctx.fillStyle = o2; ctx.fillRect(0,0,W,H);
+  // Orbs
+  const [oa1,ob1,ox1,oy1]=th.orb1;
+  const g1=ctx.createRadialGradient(ox1,oy1,0,ox1,oy1,420);
+  g1.addColorStop(0,oa1); g1.addColorStop(1,ob1); ctx.fillStyle=g1; ctx.fillRect(0,0,W,H);
+  const [oa2,ob2,ox2,oy2]=th.orb2;
+  const g2=ctx.createRadialGradient(ox2,oy2,0,ox2,oy2,360);
+  g2.addColorStop(0,oa2); g2.addColorStop(1,ob2); ctx.fillStyle=g2; ctx.fillRect(0,0,W,H);
 
-  function wrapText(text: string, maxW: number, font: string): string[] {
-    ctx.font = font;
-    const words = text.split(' '); const lines: string[] = []; let cur = '';
-    for (const w of words) {
-      const test = cur ? `${cur} ${w}` : w;
-      if (ctx.measureText(test).width > maxW) { if (cur) lines.push(cur); cur = w; }
-      else cur = test;
-    }
-    if (cur) lines.push(cur);
-    return lines;
-  }
+  // ── Top bar ──
+  ctx.font='bold 30px monospace'; ctx.fillStyle='rgba(255,255,255,0.5)';
+  ctx.fillText('SubText AI', PAD, 70);
 
-  ctx.font='bold 28px monospace'; ctx.fillStyle='rgba(161,161,170,0.7)';
-  ctx.fillText('THEY SAID',80,120);
-  ctx.strokeStyle='rgba(139,92,246,0.4)'; ctx.lineWidth=1;
-  ctx.beginPath(); ctx.moveTo(80,135); ctx.lineTo(280,135); ctx.stroke();
+  // Vibe badge (top right)
+  const badgeText = `${th.emoji}  ${th.vibe}`;
+  ctx.font='bold 24px monospace';
+  const bW2 = ctx.measureText(badgeText).width + 40;
+  rrect(ctx, W-PAD-bW2, 40, bW2, 44, 22);
+  ctx.fillStyle=th.badge; ctx.fill();
+  ctx.fillStyle='#fff'; ctx.fillText(badgeText, W-PAD-bW2+20, 68);
 
-  const bX=80,bY=160,bW=W-160;
-  const mFont='500 44px Georgia,serif';
-  const mLines=wrapText(`"${originalText}"`,bW-60,mFont);
-  const bH=mLines.length*60+60;
-  ctx.fillStyle='rgba(255,255,255,0.05)'; ctx.strokeStyle='rgba(255,255,255,0.1)'; ctx.lineWidth=1;
-  const r=20;
-  ctx.beginPath(); ctx.moveTo(bX+r,bY); ctx.lineTo(bX+bW-r,bY);
-  ctx.quadraticCurveTo(bX+bW,bY,bX+bW,bY+r); ctx.lineTo(bX+bW,bY+bH-r);
-  ctx.quadraticCurveTo(bX+bW,bY+bH,bX+bW-r,bY+bH); ctx.lineTo(bX+r,bY+bH);
-  ctx.quadraticCurveTo(bX,bY+bH,bX,bY+bH-r); ctx.lineTo(bX,bY+r);
-  ctx.quadraticCurveTo(bX,bY,bX+r,bY); ctx.closePath(); ctx.fill(); ctx.stroke();
-  ctx.font=mFont; ctx.fillStyle='rgba(255,255,255,0.9)';
-  mLines.forEach((l,i)=>ctx.fillText(l,bX+30,bY+50+i*60));
+  ctx.strokeStyle=th.dividerColor; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(PAD,96); ctx.lineTo(W-PAD,96); ctx.stroke();
 
-  const dY=bY+bH+70;
-  ctx.strokeStyle='rgba(139,92,246,0.3)'; ctx.lineWidth=1; ctx.setLineDash([6,4]);
-  ctx.beginPath(); ctx.moveTo(80,dY); ctx.lineTo(W-80,dY); ctx.stroke(); ctx.setLineDash([]);
-  ctx.font='bold 24px monospace'; ctx.fillStyle='rgba(167,139,250,0.8)';
-  const lbl='✦  WHAT THEY REALLY MEAN  ✦';
-  ctx.fillText(lbl,(W-ctx.measureText(lbl).width)/2,dY+45);
+  // ── THEY SAID ──
+  let cy = 136;
+  ctx.font='bold 22px monospace'; ctx.fillStyle=th.labelColor;
+  ctx.fillText('THEY SAID', PAD, cy); cy+=16;
+  ctx.strokeStyle=th.accent; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(PAD,cy); ctx.lineTo(PAD+190,cy); ctx.stroke(); cy+=22;
 
-  const hX=80,hY=dY+75,hW=W-160;
-  const hFont='bold 52px Georgia,serif';
-  const hLines=wrapText(hiddenMeaning,hW-80,hFont);
-  const hH=hLines.length*72+60;
-  const cg=ctx.createLinearGradient(hX,hY,hX+hW,hY+hH);
-  cg.addColorStop(0,'rgba(139,92,246,0.2)'); cg.addColorStop(1,'rgba(236,72,153,0.15)');
-  ctx.fillStyle=cg; ctx.strokeStyle='rgba(139,92,246,0.5)'; ctx.lineWidth=1.5;
-  ctx.beginPath(); ctx.moveTo(hX+r,hY); ctx.lineTo(hX+hW-r,hY);
-  ctx.quadraticCurveTo(hX+hW,hY,hX+hW,hY+r); ctx.lineTo(hX+hW,hY+hH-r);
-  ctx.quadraticCurveTo(hX+hW,hY+hH,hX+hW-r,hY+hH); ctx.lineTo(hX+r,hY+hH);
-  ctx.quadraticCurveTo(hX,hY+hH,hX,hY+hH-r); ctx.lineTo(hX,hY+r);
-  ctx.quadraticCurveTo(hX,hY,hX+r,hY); ctx.closePath(); ctx.fill(); ctx.stroke();
-  ctx.font=hFont; ctx.fillStyle='#fff';
-  hLines.forEach((l,i)=>ctx.fillText(l,hX+40,hY+58+i*72));
+  const trimMsg = originalText.length > 180 ? originalText.slice(0,177)+'…' : originalText;
+  const mLines = wrapLines(ctx, `"${trimMsg}"`, W-PAD*2-60, '500 42px Georgia,serif', 4);
+  const mH = mLines.length*58+52;
+  rrect(ctx, PAD, cy, W-PAD*2, mH, 20);
+  ctx.fillStyle='rgba(255,255,255,0.05)'; ctx.fill();
+  ctx.strokeStyle='rgba(255,255,255,0.09)'; ctx.lineWidth=1; ctx.stroke();
+  ctx.font='500 42px Georgia,serif'; ctx.fillStyle='rgba(255,255,255,0.88)';
+  mLines.forEach((l,i) => ctx.fillText(l, PAD+30, cy+46+i*58));
+  cy += mH + 50;
 
-  const barY=H-110;
-  const bg2=ctx.createLinearGradient(0,barY,W,barY+110);
-  bg2.addColorStop(0,'rgba(139,92,246,0.15)'); bg2.addColorStop(1,'rgba(236,72,153,0.1)');
-  ctx.fillStyle=bg2; ctx.fillRect(0,barY,W,110);
-  ctx.strokeStyle='rgba(139,92,246,0.3)'; ctx.lineWidth=1;
+  // ── Divider ──
+  ctx.strokeStyle=th.dividerColor; ctx.lineWidth=1; ctx.setLineDash([6,5]);
+  ctx.beginPath(); ctx.moveTo(PAD,cy); ctx.lineTo(W-PAD,cy); ctx.stroke();
+  ctx.setLineDash([]); cy+=42;
+  ctx.font='bold 22px monospace'; ctx.fillStyle=th.labelColor;
+  const midLbl='✦  WHAT THIS ACTUALLY MEANS  ✦';
+  ctx.fillText(midLbl,(W-ctx.measureText(midLbl).width)/2, cy); cy+=50;
+
+  // ── Hidden Meaning card ──
+  const hmLines = wrapLines(ctx, hiddenMeaning, W-PAD*2-80, 'bold 54px Georgia,serif', 4);
+  const hmH = hmLines.length*72+64;
+  const hmG = ctx.createLinearGradient(PAD,cy,W-PAD,cy+hmH);
+  hmG.addColorStop(0,th.hmBg[0]); hmG.addColorStop(1,th.hmBg[1]);
+  rrect(ctx, PAD, cy, W-PAD*2, hmH, 22);
+  ctx.fillStyle=hmG; ctx.fill();
+  ctx.strokeStyle=th.hmBorder; ctx.lineWidth=1.5; ctx.stroke();
+  ctx.font='bold 54px Georgia,serif'; ctx.fillStyle='#fff';
+  hmLines.forEach((l,i) => ctx.fillText(l, PAD+40, cy+58+i*72));
+  cy += hmH + 40;
+
+  // ── Tone + Vibe pills ──
+  const toneText = `TONE: ${(tone.length>18?tone.slice(0,16)+'…':tone).toUpperCase()}`;
+  ctx.font='bold 22px monospace';
+  const tpW = ctx.measureText(toneText).width + 44;
+  rrect(ctx, PAD, cy, tpW, 50, 25);
+  ctx.fillStyle='rgba(255,255,255,0.06)'; ctx.fill();
+  ctx.strokeStyle='rgba(255,255,255,0.12)'; ctx.lineWidth=1; ctx.stroke();
+  ctx.fillStyle='rgba(255,255,255,0.65)'; ctx.fillText(toneText, PAD+22, cy+32);
+
+  const vibeText = suggestedVibe.length>42 ? suggestedVibe.slice(0,39)+'…' : suggestedVibe;
+  ctx.font='20px monospace';
+  const vpW2 = Math.min(ctx.measureText(vibeText).width+44, W-PAD*2-tpW-20);
+  rrect(ctx, PAD+tpW+16, cy, vpW2, 50, 25);
+  ctx.fillStyle=th.hmBg[0]; ctx.fill();
+  ctx.strokeStyle=th.hmBorder; ctx.lineWidth=1; ctx.stroke();
+  ctx.fillStyle=th.labelColor; ctx.fillText(vibeText, PAD+tpW+16+22, cy+31);
+
+  // ── Bottom branding ──
+  const barY = H-118;
+  ctx.fillStyle='rgba(0,0,0,0.6)'; ctx.fillRect(0,barY,W,118);
+  ctx.strokeStyle=th.dividerColor; ctx.lineWidth=1;
   ctx.beginPath(); ctx.moveTo(0,barY); ctx.lineTo(W,barY); ctx.stroke();
-  ctx.font='bold 36px monospace'; ctx.fillStyle='rgba(255,255,255,0.9)'; ctx.fillText('SubText AI',80,barY+65);
-  ctx.font='24px monospace'; ctx.fillStyle='rgba(167,139,250,0.7)'; ctx.fillText('trysubtext.online',80,barY+95);
-  ctx.font='bold 28px monospace'; ctx.fillStyle='rgba(236,72,153,0.8)';
-  const badge="✦ decode what's unsaid";
-  ctx.fillText(badge,W-ctx.measureText(badge).width-80,barY+65);
+  ctx.font='bold 32px monospace'; ctx.fillStyle='rgba(255,255,255,0.9)';
+  ctx.fillText('SubText AI', PAD, barY+56);
+  ctx.font='20px monospace'; ctx.fillStyle=th.labelColor;
+  ctx.fillText('trysubtext.online', PAD, barY+88);
+  ctx.font='bold 24px monospace'; ctx.fillStyle=th.badge;
+  const tag="decode what's unsaid ✦";
+  ctx.fillText(tag, W-ctx.measureText(tag).width-PAD, barY+72);
 
-  const a=document.createElement('a');
-  a.download='subtext-decoded.png'; a.href=canvas.toDataURL('image/png'); a.click();
+  // ── Share or download ──
+  return new Promise<void>((resolve, reject) => {
+    canvas.toBlob(async (blob) => {
+      if (!blob) { reject(new Error('Canvas export failed')); return; }
+      const file = new File([blob], 'subtext-decoded.png', { type: 'image/png' });
+      if (
+        typeof navigator !== 'undefined' &&
+        navigator.share &&
+        navigator.canShare &&
+        navigator.canShare({ files: [file] })
+      ) {
+        try {
+          await navigator.share({ files: [file], title: 'SubText decoded this' });
+        } catch (e: any) {
+          if (e?.name !== 'AbortError') reject(e);
+        }
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href=url; a.download='subtext-decoded.png'; a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+      }
+      resolve();
+    }, 'image/png');
+  });
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -370,8 +538,8 @@ export default function Dashboard() {
     if (!decodeOutput) return;
     setIsGeneratingCard(true);
     try {
-      await downloadShareCard(input, decodeOutput.hiddenMeaning);
-      showToast('Share card downloaded! Post it anywhere 🔥', 'success');
+      await downloadShareCard(input, decodeOutput.hiddenMeaning, decodeOutput.tone, decodeOutput.suggestedVibe);
+      showToast('Share card ready! Post it anywhere 🔥', 'success');
     } catch (e) { console.error(e); showToast('Could not generate card. Try again.', 'error'); }
     finally { setIsGeneratingCard(false); }
   };
@@ -654,7 +822,9 @@ export default function Dashboard() {
                       </div>
                       <div>
                         <p className="text-xs font-bold uppercase tracking-widest text-zinc-400">Go Viral</p>
-                        <p className="text-xs text-zinc-500 mt-0.5">Download a share card — post it to TikTok, Reels, or Stories</p>
+                        <p className="text-xs text-zinc-500 mt-0.5">
+                          Creates a card styled to the <span className="text-zinc-400 font-medium">{decodeOutput.tone}</span> tone — share straight to TikTok, Reels, or Stories
+                        </p>
                       </div>
                     </div>
                     <button
@@ -663,8 +833,8 @@ export default function Dashboard() {
                       className="shimmer-btn w-full text-white font-bold py-3.5 rounded-xl disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 text-sm tracking-wide shadow-lg shadow-pink-500/20 hover:shadow-pink-500/40 hover:scale-[1.02] active:scale-[0.98] transition-all"
                     >
                       {isGeneratingCard
-                        ? <><Loader2 size={16} className="animate-spin"/>Generating share card...</>
-                        : <><Share2 size={16}/>Download Share Card <span className="text-white/60 font-normal">→ post anywhere</span></>
+                        ? <><Loader2 size={16} className="animate-spin"/>Building your card...</>
+                        : <><Share2 size={16}/>Share This Decode <span className="text-white/60 font-normal">→ TikTok · Reels · Stories</span></>
                       }
                     </button>
                   </div>
