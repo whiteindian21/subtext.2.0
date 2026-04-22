@@ -4,18 +4,47 @@ import { supabase } from '@/lib/supabaseClient';
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
 
+// ─── Types ────────────────────────────────────────────────────────────────────
+
 interface Reply {
   text: string;
   tone: string;
   score: number;
+  intent: string;
 }
 
 interface ReplyResult {
   replies: Reply[];
 }
 
-// ✅ Safe JSON extraction
-function extractJSON(text: string) {
+interface ParsedContext {
+  suggestedVibe?: string;
+  hiddenMeaning?: string;
+  analysis?: string;
+  emotionalIntensity?: string;
+}
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const VALID_TONES = [
+  'confident', 'funny', 'savage', 'chill', 'sarcastic',
+  'romantic', 'supportive', 'dry', 'energetic', 'mysterious',
+  'apologetic', 'flirty',
+] as const;
+
+type ValidTone = typeof VALID_TONES[number];
+
+const REPLY_PERSONALITIES = [
+  { label: 'Confident', description: 'calm, grounded, self-assured — does not chase' },
+  { label: 'Playful', description: 'teasing, light tension, slightly flirty — keeps it fun' },
+  { label: 'Curious', description: 'pulls them in with a question — creates intrigue' },
+  { label: 'Honest', description: 'shows genuine emotion or vulnerability — real, not scripted' },
+  { label: 'Bold', description: 'slightly risky, unexpected — makes them stop and think' },
+] as const;
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function extractJSON(text: string): Record<string, unknown> | null {
   try {
     return JSON.parse(text);
   } catch {
@@ -29,167 +58,164 @@ function extractJSON(text: string) {
   return null;
 }
 
-// ✅ Retry logic
-async function fetchWithRetry(fetchFn: () => Promise<Response>, retries = 2) {
+async function fetchWithRetry(
+  fetchFn: () => Promise<Response>,
+  retries = 2,
+  delayMs = 400
+): Promise<Response> {
+  let lastError: unknown;
   for (let i = 0; i <= retries; i++) {
     try {
       const res = await fetchFn();
       if (res.ok) return res;
-    } catch {}
-    await new Promise(r => setTimeout(r, 400));
+      lastError = new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      lastError = err;
+    }
+    if (i < retries) await new Promise((r) => setTimeout(r, delayMs * (i + 1)));
   }
-  throw new Error('Failed after retries');
+  throw lastError;
 }
 
-// ✅ Context parser
-function parseContext(context: string) {
-  const result: any = {};
-  if (!context) return result;
+function sanitizeText(text: string): string {
+  return text.trim().slice(0, 3000);
+}
 
-  const vibeMatch = context.match(/\[Suggested Vibe\]\s*(.*?)(?:\n|$)/i);
-  if (vibeMatch) result.suggestedVibe = vibeMatch[1].trim().toLowerCase();
+function parseContext(context: string | undefined): ParsedContext {
+  if (!context?.trim()) return {};
+  const result: ParsedContext = {};
 
-  const hiddenMatch = context.match(/\[Hidden Meaning\]\s*(.*?)(?:\n|$)/i);
-  if (hiddenMatch) result.hiddenMeaning = hiddenMatch[1].trim();
+  const patterns: Array<[keyof ParsedContext, RegExp]> = [
+    ['suggestedVibe', /\[Suggested Vibe\]\s*(.*?)(?:\n|$)/i],
+    ['hiddenMeaning', /\[Hidden Meaning\]\s*(.*?)(?:\n|$)/i],
+    ['analysis', /\[Decoded Analysis\]\s*(.*?)(?:\n|$)/i],
+    ['emotionalIntensity', /\[Emotional Intensity\]\s*(.*?)(?:\n|$)/i],
+  ];
 
-  const analysisMatch = context.match(/\[Decoded Analysis\]\s*(.*?)(?:\n|$)/i);
-  if (analysisMatch) result.analysis = analysisMatch[1].trim();
+  for (const [key, regex] of patterns) {
+    const match = context.match(regex);
+    if (match) result[key] = match[1].trim();
+  }
 
   return result;
 }
 
+function extractLastMessage(text: string): string | null {
+  const matches = text.match(/Other:\s*([\s\S]*?)(?=\n(?:User:|Other:)|\n*$)/g);
+  if (!matches?.length) return null;
+  return matches[matches.length - 1].replace(/^Other:\s*/, '').trim();
+}
+
+function getLengthInstruction(totalLength: number): string {
+  if (totalLength < 80) return 'Each reply must be under 12 words. Short and punchy.';
+  if (totalLength > 300) return 'Each reply should be 2–3 sentences. Thoughtful but not over-explaining.';
+  return 'Each reply should be 1–2 sentences. Natural texting length.';
+}
+
+function buildFallbackReplies(tone: string): ReplyResult {
+  return {
+    replies: [
+      { text: "honestly not sure how to respond to that…", tone, score: 0, intent: 'neutral' },
+    ],
+  };
+}
+
+// ─── Route ────────────────────────────────────────────────────────────────────
+
 export async function POST(req: Request) {
+  // ── 1. Env check ──
+  if (!DEEPSEEK_API_KEY) {
+    console.error('[reply] Missing DEEPSEEK_API_KEY');
+    return NextResponse.json({ error: 'Server misconfiguration' }, { status: 500 });
+  }
+
+  // ── 2. Parse + validate body ──
+  let userId: string, text: string, tone: string, context: string | undefined;
   try {
-    if (!DEEPSEEK_API_KEY) {
-      return NextResponse.json({ error: 'Missing API key' }, { status: 500 });
-    }
+    ({ userId, text, tone, context } = await req.json());
+  } catch {
+    return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
+  }
 
-    const { userId, text, tone, context } = await req.json();
+  if (!userId || typeof userId !== 'string') {
+    return NextResponse.json({ error: 'Missing userId' }, { status: 400 });
+  }
+  if (!text || typeof text !== 'string' || text.trim().length === 0) {
+    return NextResponse.json({ error: 'Missing or empty text' }, { status: 400 });
+  }
+  if (!tone || typeof tone !== 'string') {
+    return NextResponse.json({ error: 'Missing tone' }, { status: 400 });
+  }
 
-    if (!userId || !text || !tone) {
-      return NextResponse.json({ error: 'Missing fields' }, { status: 400 });
-    }
+  // ── 3. Normalize tone ──
+  const normalizedTone: ValidTone = VALID_TONES.includes(
+    tone.toLowerCase().trim() as ValidTone
+  )
+    ? (tone.toLowerCase().trim() as ValidTone)
+    : 'chill';
 
-    // ✅ Normalize tone
-    let normalizedTone = String(tone).toLowerCase().trim();
+  const cleanText = sanitizeText(text);
+  const decoded = parseContext(context);
 
-    const validTones = [
-      'confident','funny','savage','chill','sarcastic','romantic',
-      'supportive','dry','energetic','mysterious','apologetic','flirty'
-    ];
+  // ── 4. Verify user + credits ──
+  const { data: user, error: userError } = await supabase
+    .from('profiles')
+    .select('id, credits')
+    .eq('id', userId)
+    .single();
 
-    if (!validTones.includes(normalizedTone)) {
-      normalizedTone = 'chill';
-    }
+  if (userError || !user) {
+    return NextResponse.json({ error: 'User not found' }, { status: 404 });
+  }
 
-    // ✅ User check
-    const { data: user } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('id', userId)
-      .single();
+  if ((user.credits ?? 0) < 1) {
+    return NextResponse.json({ error: 'Insufficient credits' }, { status: 402 });
+  }
 
-    if (!user) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 });
-    }
+  // ── 5. Build conversation context ──
+  const lastMessage = extractLastMessage(cleanText);
+  const conversationContext = lastMessage
+    ? `Conversation:\n${cleanText}\n\nYou are replying to:\n"${lastMessage}"`
+    : `Message:\n${cleanText}`;
 
-    const decoded = parseContext(context);
+  const totalLength = cleanText.length + (context?.length ?? 0);
+  const lengthInstruction = getLengthInstruction(totalLength);
 
-    // ✅ Extract last message
-    const matches = text.match(/Other:\s*([\s\S]*?)(?=\n(?:User:|Other:)|\n*$)/g);
+  // ── 6. Build prompt ──
+  const personalitiesBlock = REPLY_PERSONALITIES.map(
+    (p, i) => `${i + 1}. ${p.label} → ${p.description}`
+  ).join('\n');
 
-    let conversationContext = text;
+  const systemMessage = `
+You are SubText AI — an expert in attraction psychology, emotional intelligence, and modern texting.
 
-    if (matches && matches.length > 0) {
-      const last = matches[matches.length - 1]
-        .replace(/^Other:\s*/, '')
-        .trim();
-
-      conversationContext = `Conversation:\n${text}\n\nReply to:\n"${last}"`;
-    }
-
-    // ✅ Smart length logic
-    const totalLength = (text + (context || '')).length;
-
-    const isShort = totalLength < 80;
-    const isLong = totalLength > 200;
-
-    const lengthInstruction = isShort
-      ? "Replies must be under 12 words."
-      : isLong
-      ? "Replies should be 2–3 thoughtful sentences."
-      : "Replies should be 1–2 sentences.";
-
-    // 🔥 FINAL EMOTION + INTELLIGENCE PROMPT
-    const systemMessage = `
-You are SubText AI — an expert in texting, attraction psychology, and emotional intelligence.
-
-Your goal is to generate replies that feel REAL, EMOTIONAL, and ENGAGING.
+Your job is to generate 5 replies that each feel like a DIFFERENT person wrote them.
+Each reply must move the conversation forward and make the other person WANT to respond.
 
 ---
 
-STEP 1: Understand deeply (internal)
-- what are they feeling?
-- what do they actually mean?
-- what is the emotional tension?
+CONTEXT FROM DECODE:
+- Hidden meaning: ${decoded.hiddenMeaning ?? 'not provided'}
+- Emotional tone: ${decoded.analysis ?? 'not provided'}
+- Suggested vibe: ${decoded.suggestedVibe ?? 'not provided'}
+- Emotional intensity: ${decoded.emotionalIntensity ?? 'not provided'}
+- User's target tone: ${normalizedTone}
 
 ---
 
-STEP 2: Respond with intent
-Each reply must:
-- move the conversation forward
-- create engagement (not dead-end)
-- either reduce tension OR build attraction
+GENERATE 5 REPLIES WITH THESE PERSONALITIES:
+${personalitiesBlock}
 
 ---
 
 RULES:
-- no robotic phrasing
-- no generic replies like "I understand"
-- no boring or safe replies
-- no over-explaining
-- avoid needy energy
-
----
-
-STYLE:
-- casual texting tone
-- lowercase is fine
-- emotion should feel natural, not forced
-
----
-
-EMOTIONAL DEPTH:
-- reflect their emotion when needed
-- if tension exists, lean into it slightly
-- allow subtle vulnerability when appropriate
-- DO NOT play it safe
-
----
-
-CONVERSATION PULL:
-- at least 2 replies must create curiosity or invite a response
-- avoid replies that end the conversation
-
----
-
-DIVERSITY (IMPORTANT):
-Generate 5 replies with DISTINCT emotional energy:
-
-1. Confident → calm, grounded, self-assured  
-2. Playful → teasing, light tension, slightly flirty  
-3. Curious → pulls them in with a question  
-4. Emotional → shows understanding or honesty  
-5. Bold → slightly risky, intriguing, unexpected  
-
-Each reply must feel like a DIFFERENT personality.
-
----
-
-QUALITY CHECK:
-If it sounds like AI → rewrite it.
-
-Replies should make the other person WANT to respond.
+- No robotic phrasing. If it sounds like AI, rewrite it.
+- No generic openers like "I understand", "that's fair", "I hear you"
+- No over-explaining or justifying
+- No needy or desperate energy
+- Lowercase is fine — this is texting, not an email
+- At least 3 replies must create curiosity or naturally invite a response
+- Each reply must feel emotionally distinct from the others
 
 ---
 
@@ -197,114 +223,113 @@ ${lengthInstruction}
 
 ---
 
-CONTEXT:
-Hidden meaning: ${decoded.hiddenMeaning || 'unknown'}
-Analysis: ${decoded.analysis || 'unknown'}
-
----
-
-OUTPUT STRICT JSON:
+OUTPUT STRICT JSON ONLY — no markdown, no explanation:
 {
   "replies": [
-    { "text": "...", "tone": "${normalizedTone}", "score": number }
+    {
+      "text": "the reply text",
+      "tone": "personality label in lowercase",
+      "score": number 1-100 (how likely this gets a response),
+      "intent": "one phrase describing what this reply accomplishes"
+    }
   ]
 }
-`;
+`.trim();
 
-    const userPrompt = `
-${conversationContext}
+  const userPrompt = `${conversationContext}\n\nTarget tone: ${normalizedTone}`;
 
-Target tone: ${normalizedTone}
-`;
+  // ── 7. Call AI ──
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
 
-    // ✅ API call
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
+  let aiText = '';
 
-    let aiText = '';
+  try {
+    const response = await fetchWithRetry(() =>
+      fetch(DEEPSEEK_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: 'deepseek-chat',
+          messages: [
+            { role: 'system', content: systemMessage },
+            { role: 'user', content: userPrompt },
+          ],
+          temperature: 0.8,
+          max_tokens: 800,
+          response_format: { type: 'json_object' },
+        }),
+        signal: controller.signal,
+      })
+    );
 
-    try {
-      const response = await fetchWithRetry(() =>
-        fetch(DEEPSEEK_API_URL, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
-          },
-          body: JSON.stringify({
-            model: 'deepseek-chat',
-            messages: [
-              { role: 'system', content: systemMessage },
-              { role: 'user', content: userPrompt },
-            ],
-            temperature: 0.75, // 🔥 slightly higher = more emotion
-            response_format: { type: 'json_object' },
-          }),
-          signal: controller.signal,
-        })
-      );
+    clearTimeout(timeout);
 
-      clearTimeout(timeout);
+    const data = await response.json();
+    aiText = data?.choices?.[0]?.message?.content ?? '';
 
-      const data = await response.json();
-      aiText = data?.choices?.[0]?.message?.content || '';
-
-      if (!aiText) throw new Error('Empty AI response');
-
-    } catch (err: any) {
-      if (err.name === 'AbortError') {
-        return NextResponse.json({ error: 'AI timeout' }, { status: 504 });
-      }
-
-      return NextResponse.json({ error: 'AI failed' }, { status: 500 });
+    if (!aiText) throw new Error('Empty AI response');
+  } catch (err: unknown) {
+    clearTimeout(timeout);
+    if (err instanceof Error && err.name === 'AbortError') {
+      return NextResponse.json({ error: 'AI request timed out' }, { status: 504 });
     }
+    console.error('[reply] AI call failed:', err);
+    return NextResponse.json({ error: 'AI service unavailable' }, { status: 502 });
+  }
 
-    // ✅ Parse safely
-    let parsed: ReplyResult;
+  // ── 8. Parse + validate replies ──
+  const raw = extractJSON(aiText);
+  let parsed: ReplyResult;
 
-    const raw = extractJSON(aiText);
+  if (raw && Array.isArray(raw.replies) && raw.replies.length > 0) {
+    const replies: Reply[] = (raw.replies as Record<string, unknown>[])
+      .slice(0, 5)
+      .map((r) => ({
+        text: String(r.text ?? '').trim(),
+        tone: String(r.tone ?? normalizedTone).trim(),
+        score: typeof r.score === 'number'
+          ? Math.min(100, Math.max(0, Math.round(r.score)))
+          : 50,
+        intent: String(r.intent ?? '').trim(),
+      }))
+      .filter((r) => r.text.length > 0);
 
-    if (raw && Array.isArray(raw.replies)) {
-      const replies = raw.replies.slice(0, 5).map((r: any) => ({
-        text: String(r.text || '').trim(),
-        tone: normalizedTone,
-        score: Number(r.score || 0),
-      }));
-
-      // ⭐ Sort by best reply first
-      replies.sort((a: Reply, b: Reply) => b.score - a.score);
-
-      parsed = { replies };
-
+    if (replies.length === 0) {
+      parsed = buildFallbackReplies(normalizedTone);
     } else {
-      parsed = {
-        replies: [
-          { text: "not sure what to say here…", tone: normalizedTone, score: 0 }
-        ],
-      };
+      // Sort best reply first
+      replies.sort((a, b) => b.score - a.score);
+      parsed = { replies };
     }
+  } else {
+    parsed = buildFallbackReplies(normalizedTone);
+  }
 
-    // ✅ Deduct credits
-    if (parsed.replies.length > 0) {
-      try {
-        await supabase.rpc('deduct_credits', {
-          p_user_id: userId,
-          p_amount: 1,
-          p_type: 'reply',
-        });
-      } catch {}
-    }
+  // ── 9. Deduct credits only on success ──
+  const replySucceeded =
+    parsed.replies.length > 0 &&
+    parsed.replies[0].text !== buildFallbackReplies(normalizedTone).replies[0].text;
 
-    return NextResponse.json({
-      success: true,
-      result: parsed,
-      type: 'reply',
+  if (replySucceeded) {
+    const { error: deductError } = await supabase.rpc('deduct_credits', {
+      p_user_id: userId,
+      p_amount: 1,
+      p_type: 'reply',
     });
 
-  } catch (err: any) {
-    return NextResponse.json(
-      { error: err?.message || 'Server error' },
-      { status: 500 }
-    );
+    if (deductError) {
+      console.error('[reply] Credit deduction failed:', deductError);
+    }
   }
+
+  // ── 10. Respond ──
+  return NextResponse.json({
+    success: replySucceeded,
+    result: parsed,
+    type: 'reply',
+  });
 }
